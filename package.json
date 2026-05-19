@@ -1,0 +1,44 @@
+{
+  "name": "opencode-provider-protector",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for Protector Insurance LLM — zero-touch access to company LLMs via API-key-authenticated LiteLLM proxy",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "build": "bun run typecheck && bun run test:run"
+  },
+  "keywords": [
+    "opencode",
+    "protector",
+    "llm",
+    "plugin",
+    "litellm"
+  ],
+  "license": "UNLICENSED",
+  "author": "Protector Insurance AI Platform Team",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/protectorinsurance/opencode-provider-protector.git"
+  },
+  "engines": {
+    "opencode": ">=1.14.0"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "vitest": "^3.0.0",
+    "@vitest/coverage-v8": "^3.0.0"
+  }
+}
