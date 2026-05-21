@@ -11,10 +11,11 @@ vi.mock('./discovery.js', () => ({
 // Mock the utils module
 vi.mock('./utils.js', () => ({
   resolvePluginConfig: vi.fn(),
+  getProviderId: vi.fn(() => 'litellm'),
   mapLiteLLMModel: vi.fn(),
 }))
 
-import { ProtectorLlmPlugin } from './plugin.js'
+import { LiteLLMPlugin } from './plugin.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { resolvePluginConfig } from './utils.js'
 
@@ -35,7 +36,7 @@ function createMockInput(): PluginInput {
   }
 }
 
-describe('ProtectorLlmPlugin', () => {
+describe('LiteLLMPlugin', () => {
   let mockInput: PluginInput
   let logFn: ReturnType<typeof vi.fn>
 
@@ -57,7 +58,7 @@ describe('ProtectorLlmPlugin', () => {
     vi.mocked(discoverModels).mockResolvedValue(models)
     vi.mocked(injectModelsIntoConfig).mockImplementation(() => {})
     vi.mocked(resolvePluginConfig).mockReturnValue({
-      url: 'https://protector.example.com',
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
   })
@@ -66,15 +67,15 @@ describe('ProtectorLlmPlugin', () => {
     vi.mocked(resolvePluginConfig).mockReturnValue(null)
 
     await expect(
-      ProtectorLlmPlugin(mockInput, {})
+      LiteLLMPlugin(mockInput, {})
     ).rejects.toThrow(
       "Plugin config error: set 'url' and 'apiKey'",
     )
   })
 
   it('config hook calls discoverModels and injects models into config', async () => {
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
 
@@ -82,19 +83,20 @@ describe('ProtectorLlmPlugin', () => {
     await hooks.config?.(testConfig)
 
     expect(discoverModels).toHaveBeenCalledWith(
-      { url: 'https://protector.example.com', apiKey: 'test-api-key' },
+      { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
       expect.any(Function),
     )
     expect(injectModelsIntoConfig).toHaveBeenCalledWith(
       testConfig,
-      'protector',
-      'https://protector.example.com',
+      'litellm',
+      'https://litellm.example.com',
+      'test-api-key',
       expect.any(Object),
     )
     expect(logFn).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({
-          service: 'protector',
+          service: 'litellm',
           level: 'info',
           message: expect.stringContaining('Discovered'),
         }),
@@ -105,8 +107,8 @@ describe('ProtectorLlmPlugin', () => {
   it('config hook catches errors and does not throw', async () => {
     vi.mocked(discoverModels).mockRejectedValue(new Error('Network error'))
 
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
 
@@ -115,7 +117,7 @@ describe('ProtectorLlmPlugin', () => {
     expect(logFn).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({
-          service: 'protector',
+          service: 'litellm',
           level: 'warn',
           message: expect.stringContaining('Model discovery failed'),
         }),
@@ -126,8 +128,8 @@ describe('ProtectorLlmPlugin', () => {
   it('config hook logs warning and skips inject when no models discovered', async () => {
     vi.mocked(discoverModels).mockResolvedValue({})
 
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
 
@@ -137,7 +139,7 @@ describe('ProtectorLlmPlugin', () => {
     expect(logFn).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({
-          service: 'protector',
+          service: 'litellm',
           level: 'warn',
           message: 'No models discovered',
         }),
@@ -146,8 +148,8 @@ describe('ProtectorLlmPlugin', () => {
   })
 
   it('auth hook returns success when API key is provided', async () => {
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
 
@@ -157,8 +159,8 @@ describe('ProtectorLlmPlugin', () => {
   })
 
   it('auth hook returns failed when API key is empty', async () => {
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
 
@@ -167,48 +169,12 @@ describe('ProtectorLlmPlugin', () => {
   })
 
   it('auth hook returns failed when no inputs provided', async () => {
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
 
     const result = await hooks.auth?.methods[0].authorize?.()
     expect(result).toEqual({ type: 'failed' })
-  })
-
-  it('chat.headers hook adds Authorization header for protector-llm provider', async () => {
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    const input = {
-      provider: {
-        info: { id: 'protector' },
-      } as never,
-    } as never
-    const output = { headers: {} as Record<string, string> }
-
-    await hooks['chat.headers']?.(input, output)
-
-    expect(output.headers['Authorization']).toBe('Bearer test-api-key')
-  })
-
-  it('chat.headers hook skips non-protector-llm providers', async () => {
-    const hooks = await ProtectorLlmPlugin(mockInput, {
-      url: 'https://protector.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    const input = {
-      provider: {
-        info: { id: 'openai' },
-      } as never,
-    } as never
-    const output = { headers: {} as Record<string, string> }
-
-    await hooks['chat.headers']?.(input, output)
-
-    expect(output.headers['Authorization']).toBeUndefined()
   })
 })

@@ -23,16 +23,56 @@ describe('discoverModels', () => {
   })
 
   it('returns mapped models from LiteLLM response', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: [
-          { id: 'gpt-4', max_model_len: 8192 },
-          { id: 'qwen3-32b', max_model_len: 32768 },
-        ],
-      }),
-    })
+    const mockFetch = vi.fn()
+      // /health endpoint
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          healthy_endpoints: [
+            { model: 'gpt-4', model_id: 'uuid-1' },
+            { model: 'qwen3-32b', model_id: 'uuid-2' },
+          ],
+        }),
+      })
+      // /model/info for gpt-4
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{
+            model_name: 'gpt-4',
+            model_info: {
+              max_input_tokens: 8192,
+              max_output_tokens: 8192,
+              supports_function_calling: true,
+              supports_reasoning: false,
+              supports_vision: false,
+              input_cost_per_token: 0.0001,
+              output_cost_per_token: 0.0003,
+            },
+          }],
+        }),
+      })
+      // /model/info for qwen3-32b
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{
+            model_name: 'qwen3-32b',
+            model_info: {
+              max_input_tokens: 32768,
+              max_output_tokens: 32768,
+              supports_function_calling: true,
+              supports_reasoning: true,
+              supports_vision: false,
+              input_cost_per_token: 0.00005,
+              output_cost_per_token: 0.00015,
+            },
+          }],
+        }),
+      })
     vi.stubGlobal('fetch', mockFetch)
 
     const result = await discoverModels(config, getToken)
@@ -43,6 +83,7 @@ describe('discoverModels', () => {
         tool_call: true,
         reasoning: false,
         limit: { context: 8192, output: 8192 },
+        cost: { input: 0.0001, output: 0.0003 },
         modalities: { input: ['text'], output: ['text'] },
       },
       'qwen3-32b': {
@@ -50,11 +91,12 @@ describe('discoverModels', () => {
         tool_call: true,
         reasoning: true,
         limit: { context: 32768, output: 32768 },
+        cost: { input: 0.00005, output: 0.00015 },
         modalities: { input: ['text'], output: ['text'] },
       },
     })
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://litellm.example.com/v1/models',
+      'https://litellm.example.com/health',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer test-token',
@@ -139,13 +181,13 @@ describe('injectModelsIntoConfig', () => {
       },
     }
 
-    injectModelsIntoConfig(config, 'protector', 'https://litellm.example.com', models)
+    injectModelsIntoConfig(config, 'litellm', 'https://litellm.example.com', 'sk-test-key', models)
 
     expect(config.provider).toEqual({
-      protector: {
+      litellm: {
         npm: '@ai-sdk/openai-compatible',
-        name: 'protector',
-        options: { baseURL: 'https://litellm.example.com', apiKey: 'iap-token' },
+        name: 'litellm',
+        options: { baseURL: 'https://litellm.example.com', apiKey: 'sk-test-key' },
         models,
       },
     })
@@ -154,9 +196,9 @@ describe('injectModelsIntoConfig', () => {
   it('merges with existing provider config without overwriting options', async () => {
     const config: TestConfig = {
       provider: {
-        protector: {
+        litellm: {
           npm: '@ai-sdk/openai-compatible',
-          name: 'protector',
+          name: 'litellm',
           options: { baseURL: 'https://old.example.com', apiKey: 'old-key', extra: 'value' },
           models: {
             'existing-model': {
@@ -181,17 +223,17 @@ describe('injectModelsIntoConfig', () => {
       },
     }
 
-    injectModelsIntoConfig(config, 'protector', 'https://litellm.example.com', newModels)
+    injectModelsIntoConfig(config, 'litellm', 'https://litellm.example.com', 'sk-test-key', newModels)
 
     // Existing options should be preserved
-    expect(config.provider!.protector.options).toEqual({
+    expect(config.provider!.litellm.options).toEqual({
       baseURL: 'https://old.example.com',
       apiKey: 'old-key',
       extra: 'value',
     })
 
     // Models should be merged
-    expect(config.provider!.protector.models).toEqual({
+    expect(config.provider!.litellm.models).toEqual({
       'existing-model': {
         name: 'existing-model',
         tool_call: true,
@@ -212,9 +254,9 @@ describe('injectModelsIntoConfig', () => {
   it('preserves existing provider options when merging', async () => {
     const config: TestConfig = {
       provider: {
-        protector: {
+        litellm: {
           npm: '@ai-sdk/openai-compatible',
-          name: 'protector',
+          name: 'litellm',
           options: {
             baseURL: 'https://preserved.example.com',
             apiKey: 'preserved-key',
@@ -235,10 +277,10 @@ describe('injectModelsIntoConfig', () => {
       },
     }
 
-    injectModelsIntoConfig(config, 'protector', 'https://litellm.example.com', newModels)
+    injectModelsIntoConfig(config, 'litellm', 'https://litellm.example.com', 'sk-test-key', newModels)
 
     // All existing options should be preserved
-    const provider = config.provider!.protector
+    const provider = config.provider!.litellm
     expect(provider.options!.baseURL).toBe('https://preserved.example.com')
     expect(provider.options!.apiKey).toBe('preserved-key')
     expect(provider.options!.customHeader).toBe('custom-value')

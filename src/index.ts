@@ -1,1 +1,1 @@
-export { ProtectorLlmPlugin } from './plugin.js'
+export { LiteLLMPlugin } from './plugin.js'

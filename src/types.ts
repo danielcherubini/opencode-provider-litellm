@@ -16,6 +16,16 @@ export interface OpencodeModelConfig {
     context: number
     output: number
   }
+  cost?: {
+    input: number
+    output: number
+    cache_read?: number
+    cache_write?: number
+    context_over_200k?: {
+      input: number
+      output: number
+    }
+  }
   modalities?: {
     input: Array<"text" | "audio" | "image" | "video" | "pdf">
     output: Array<"text" | "audio" | "image" | "video" | "pdf">

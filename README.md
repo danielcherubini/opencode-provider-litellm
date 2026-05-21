@@ -1,67 +1,40 @@
-# opencode-provider-protector
+# opencode-provider-litellm
 
-OpenCode plugin that gives every Protector employee access to company LLMs. Add one line to your config — models, auth, and capabilities are handled automatically.
+OpenCode plugin that auto-discovers models from any [LiteLLM](https://github.com/BerriAI/litellm) proxy — complete with costs, context limits, capabilities, and auth. Zero config, zero hand-maintained model lists.
 
 ## Quick start
 
-Set your environment variables:
-
 ```bash
-export PROTECTOR_LLM_URL="https://your-litellm-proxy.example.com"
-export PROTECTOR_LLM_KEY="sk-..."
+# 1. Set your LiteLLM proxy URL and API key
+export LITELLM_URL="https://your-litellm-proxy.example.com"
+export LITELLM_KEY="sk-..."
+
+# 2. Install the plugin
+opencode plugin opencode-provider-litellm
+
+# 3. Restart OpenCode
 ```
 
-Add the plugin to your `~/.config/opencode/opencode.json`:
+All models from your LiteLLM proxy appear in OpenCode's model picker automatically.
 
-```json
-{
-  "plugin": ["git+https://github.com/protectorinsurance/opencode-provider-protector.git"]
-}
-```
+## Configuration
 
-Restart OpenCode.
+### Environment variables
 
-## Setup
+| Variable | Description |
+|----------|-------------|
+| `LITELLM_URL` | Your LiteLLM proxy base URL |
+| `LITELLM_KEY` | API key for the proxy |
+| `LITELLM_PROVIDER_ID` | Provider ID in OpenCode (defaults to `LiteLLM`) |
 
-### 1. Set environment variables
+### Inline config
 
-```bash
-export PROTECTOR_LLM_URL="https://your-litellm-proxy.example.com"
-export PROTECTOR_LLM_KEY="sk-..."
-```
+Alternatively, provide `url` and `apiKey` directly in your `opencode.json`:
 
-Add these to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) so they persist.
-
-:::tip
-Environment variables take precedence over inline config values. Use env vars to keep secrets out of checked-in files.
-:::
-
-### 2. Add the plugin
-
-Add the plugin to your `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "plugin": ["git+https://github.com/protectorinsurance/opencode-provider-protector.git"]
-}
-```
-
-OpenCode installs the plugin automatically on startup.
-
-### 3. Select a model
-
-Run `/models` in the TUI and pick a model from the `protector` provider.
-
----
-
-### Alternative: inline config
-
-If you prefer not to use environment variables, provide `url` and `apiKey` directly in the plugin options:
-
-```json
+```jsonc
 {
   "plugin": [
-    ["git+https://github.com/protectorinsurance/opencode-provider-protector.git", {
+    ["opencode-provider-litellm", {
       "url": "https://your-litellm-proxy.example.com",
       "apiKey": "sk-..."
     }]
@@ -69,35 +42,43 @@ If you prefer not to use environment variables, provide `url` and `apiKey` direc
 }
 ```
 
-### Alternative: /connect flow
+:::tip
+Environment variables take precedence over inline config. Use env vars to keep secrets out of checked-in files.
+:::
+
+### /connect flow
 
 You can also authenticate interactively via the OpenCode TUI:
 
 1. Run `/connect`
-2. Select **Protector LLM**
+2. Select **LiteLLM**
 3. Paste your API key
 
-The key is stored in `~/.local/share/opencode/auth.json`.
+The key is stored in OpenCode's auth store.
 
 ## How it works
 
-The plugin uses three OpenCode hooks:
+The plugin uses two OpenCode hooks:
 
 | Hook | Purpose |
-|---|---|
-| `config` | Fetches available models from the LiteLLM proxy at startup and injects them into OpenCode under the `protector` provider |
+|------|---------|
+| `config` | Queries `/health` + `/model/info` on startup, discovers models with rich metadata (costs, limits, capabilities), and injects them into OpenCode |
 | `auth` | Provides a `/connect` entry point for pasting an API key |
-| `chat.headers` | Injects `Authorization: Bearer <key>` on every request to the `protector` provider |
 
-Model capabilities (tool calling, reasoning, context limits) are auto-detected from the proxy response.
+Model metadata is fetched from LiteLLM's admin API:
+
+- `/health` — model list with internal UUIDs
+- `/model/info?litellm_model_id={uuid}` — rich metadata per model (costs, context limits, vision, tool calling, reasoning, etc.)
+
+Custom model_info updates via `/model/update` are respected — no hardcoded fallbacks.
 
 ## Troubleshooting
 
 | Problem | Solution |
-|---|---|
-| "Plugin config error" | Set `PROTECTOR_LLM_URL` and `PROTECTOR_LLM_KEY`, or add `url`/`apiKey` to plugin options |
-| "Access denied" (403) | Contact your admin to grant access to the LLM proxy |
-| "No models discovered" | Verify the proxy URL is reachable and the API key is valid |
+|---------|----------|
+| "Plugin config error" | Set `LITELLM_URL` and `LITELLM_KEY`, or add `url`/`apiKey` to plugin options |
+| "Access denied" (403) | Verify the API key has access to the LiteLLM proxy |
+| "No models discovered" | Check that the proxy is reachable and the `/health` endpoint responds |
 
 ## Development
 
@@ -105,4 +86,5 @@ Model capabilities (tool calling, reasoning, context limits) are auto-detected f
 npm install
 npm run typecheck
 npm run test
+npm run build
 ```

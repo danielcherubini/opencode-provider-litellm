@@ -1,7 +1,7 @@
 {
-  "name": "opencode-provider-protector",
+  "name": "opencode-provider-litellm",
   "version": "0.1.0",
-  "description": "OpenCode plugin for Protector Insurance LLM — zero-touch access to company LLMs via API-key-authenticated LiteLLM proxy",
+  "description": "OpenCode plugin for any LiteLLM proxy \u2014 auto-discovers models, auth, and capabilities",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -14,20 +14,19 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
-    "build": "bun run typecheck && bun run test:run"
+    "build": "tsc --noEmit && esbuild src/index.ts --bundle --outfile=dist/litellm.js --platform=node --target=node20 --format=esm --external:node:* --packages=external"
   },
   "keywords": [
     "opencode",
-    "protector",
     "llm",
     "plugin",
     "litellm"
   ],
-  "license": "UNLICENSED",
-  "author": "Protector Insurance AI Platform Team",
+  "license": "MIT",
+  "author": "Daniel Cherubini",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/protectorinsurance/opencode-provider-protector.git"
+    "url": "git+https://github.com/danielcherubini/opencode-provider-litellm.git"
   },
   "engines": {
     "opencode": ">=1.14.0"
@@ -39,6 +38,7 @@
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
     "vitest": "^3.0.0",
-    "@vitest/coverage-v8": "^3.0.0"
+    "@vitest/coverage-v8": "^3.0.0",
+    "esbuild": "^0.27.0"
   }
 }
