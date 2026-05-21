@@ -15,9 +15,22 @@ vi.mock('./utils.js', () => ({
   mapLiteLLMModel: vi.fn(),
 }))
 
+// Mock the MCP tools module
+vi.mock('./mcp-tools.js', () => ({
+  createMcpToolDefinitions: vi.fn(),
+}))
+
+// Mock the Skills module
+vi.mock('./skills.js', () => ({
+  createSkillToolDefinitions: vi.fn(),
+  createSkillsInjector: vi.fn(),
+}))
+
 import { LiteLLMPlugin } from './plugin.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { resolvePluginConfig } from './utils.js'
+import { createMcpToolDefinitions } from './mcp-tools.js'
+import { createSkillToolDefinitions, createSkillsInjector } from './skills.js'
 
 function createMockInput(): PluginInput {
   const logFn = vi.fn().mockResolvedValue(true)
@@ -61,6 +74,19 @@ describe('LiteLLMPlugin', () => {
       url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
+
+    // Default MCP mock: returns one tool
+    vi.mocked(createMcpToolDefinitions).mockResolvedValue({
+      mcp_test_server_test_tool: 'mock-mcp-tool',
+    })
+    // Default Skills mock: returns two tools
+    vi.mocked(createSkillToolDefinitions).mockReturnValue({
+      skill_list: 'mock-skill-list',
+      skill_create: 'mock-skill-create',
+      skill_delete: 'mock-skill-delete',
+    })
+    // Default Skills injector mock
+    vi.mocked(createSkillsInjector).mockReturnValue(vi.fn())
   })
 
   it('throws on missing config', async () => {
@@ -176,5 +202,114 @@ describe('LiteLLMPlugin', () => {
 
     const result = await hooks.auth?.methods[0].authorize?.()
     expect(result).toEqual({ type: 'failed' })
+  })
+
+  it('tool hook returns merged MCP + Skills tools', async () => {
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(hooks.tool).toBeDefined()
+    expect(hooks.tool).toHaveProperty('mcp_test_server_test_tool')
+    expect(hooks.tool).toHaveProperty('skill_list')
+    expect(hooks.tool).toHaveProperty('skill_create')
+    expect(hooks.tool).toHaveProperty('skill_delete')
+  })
+
+  it('tool hook passes correct config and apiKey to createMcpToolDefinitions', async () => {
+    await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(createMcpToolDefinitions).toHaveBeenCalledWith(
+      { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
+      'test-api-key',
+    )
+  })
+
+  it('tool hook passes correct config and apiKey to createSkillToolDefinitions', async () => {
+    await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(createSkillToolDefinitions).toHaveBeenCalledWith(
+      { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
+      'test-api-key',
+    )
+  })
+
+  it('chat.message hook is defined', async () => {
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(hooks['chat.message']).toBeDefined()
+    expect(typeof hooks['chat.message']).toBe('function')
+  })
+
+  it('chat.message hook is created with correct config and apiKey', async () => {
+    await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(createSkillsInjector).toHaveBeenCalledWith(
+      { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
+      'test-api-key',
+    )
+  })
+
+  it('MCP discovery failure does not break the plugin — Skills tools still present', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(createMcpToolDefinitions).mockRejectedValue(new Error('MCP server unavailable'))
+
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[opencode-provider-litellm] MCP tool discovery failed: Error: MCP server unavailable',
+    )
+
+    // Skills tools should still be present
+    expect(hooks.tool).toBeDefined()
+    expect(hooks.tool).toHaveProperty('skill_list')
+    expect(hooks.tool).toHaveProperty('skill_create')
+    expect(hooks.tool).toHaveProperty('skill_delete')
+
+    // MCP tools should not be present (empty object merged)
+    expect(hooks.tool).not.toHaveProperty('mcp_test_server_test_tool')
+
+    warnSpy.mockRestore()
+  })
+
+  it('plugin works with env vars (no inline config)', async () => {
+    process.env.LITELLM_URL = 'https://env.litellm.example.com'
+    process.env.LITELLM_KEY = 'env-api-key'
+
+    vi.mocked(resolvePluginConfig).mockReturnValue({
+      url: 'https://env.litellm.example.com',
+      apiKey: 'env-api-key',
+    })
+
+    const hooks = await LiteLLMPlugin(mockInput, undefined)
+
+    expect(hooks.tool).toBeDefined()
+    expect(hooks.tool).toHaveProperty('skill_list')
+    expect(hooks['chat.message']).toBeDefined()
+    expect(typeof hooks['chat.message']).toBe('function')
+
+    expect(createMcpToolDefinitions).toHaveBeenCalledWith(
+      { url: 'https://env.litellm.example.com', apiKey: 'env-api-key' },
+      'env-api-key',
+    )
+
+    delete process.env.LITELLM_URL
+    delete process.env.LITELLM_KEY
   })
 })

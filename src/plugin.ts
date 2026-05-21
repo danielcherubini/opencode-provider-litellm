@@ -1,6 +1,8 @@
 import type { Plugin, PluginInput, PluginOptions } from '@opencode-ai/plugin'
 import { resolvePluginConfig, getProviderId } from './utils.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
+import { createMcpToolDefinitions } from './mcp-tools.js'
+import { createSkillToolDefinitions, createSkillsInjector } from './skills.js'
 
 /**
  * Main plugin entry point for the LiteLLM provider.
@@ -24,6 +26,14 @@ export const LiteLLMPlugin: Plugin = async (
   }
 
   const providerId = getProviderId()
+
+  // Discover MCP tools with graceful error handling
+  let mcpTools: Record<string, any> = {}
+  try {
+    mcpTools = await createMcpToolDefinitions(pluginConfig, pluginConfig.apiKey)
+  } catch (e) {
+    console.warn(`[opencode-provider-litellm] MCP tool discovery failed: ${e}`)
+  }
 
   return {
     /**
@@ -100,5 +110,19 @@ export const LiteLLMPlugin: Plugin = async (
         },
       ],
     },
+
+    /**
+     * Tool hook — merges dynamically-discovered MCP tools with static
+     * Skills CRUD tools.
+     */
+    tool: {
+      ...mcpTools,
+      ...createSkillToolDefinitions(pluginConfig, pluginConfig.apiKey),
+    },
+
+    /**
+     * Chat message hook — injects active Skills as context into chat messages.
+     */
+    "chat.message": createSkillsInjector(pluginConfig, pluginConfig.apiKey),
   }
 }
