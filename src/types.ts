@@ -8,6 +8,13 @@ export interface LiteLLMModel {
   max_model_len?: number
 }
 
+export interface McpTool {
+  name: string
+  server_name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
+
 export interface OpencodeModelConfig {
   name: string
   tool_call?: boolean
