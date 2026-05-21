@@ -15,6 +15,14 @@ export interface McpTool {
   input_schema: Record<string, unknown>
 }
 
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  enabled?: boolean
+  [key: string]: unknown
+}
+
 export interface OpencodeModelConfig {
   name: string
   tool_call?: boolean
