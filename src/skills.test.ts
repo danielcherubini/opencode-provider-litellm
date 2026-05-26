@@ -8,6 +8,7 @@ import {
   enableSkill,
   disableSkill,
   fetchSkillContent,
+  loadSkillContent,
   createSkillToolDefinitions,
   createSkillsInjector,
   resetSkillsCache,
@@ -462,6 +463,66 @@ describe('fetchSkillContent', () => {
   })
 })
 
+describe('loadSkillContent', () => {
+  const config: PluginConfig = {
+    url: 'https://litellm.example.com',
+    apiKey: 'test-api-key',
+  }
+  const token = 'test-token'
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns content and skill when found', async () => {
+    const mockContent = '# Test Skill\n\nContent here.'
+
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ plugins: [mockSkill] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => mockContent,
+      })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await loadSkillContent(config, token, 'code-review')
+
+    expect(result).not.toBeNull()
+    expect(result!.content).toBe(mockContent)
+    expect(result!.skill.name).toBe('code-review')
+  })
+
+  it('returns null when skill not found', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ plugins: [mockSkill] }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await loadSkillContent(config, token, 'nonexistent')
+    expect(result).toBeNull()
+  })
+
+  it('returns null when content fetch fails', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ plugins: [mockSkill] }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await loadSkillContent(config, token, 'code-review')
+    expect(result).toBeNull()
+  })
+})
+
 describe('createSkillToolDefinitions', () => {
   const config: PluginConfig = {
     url: 'https://litellm.example.com',
@@ -473,11 +534,12 @@ describe('createSkillToolDefinitions', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns 4 tools with correct names', () => {
+  it('returns 5 tools with correct names', () => {
     const result = createSkillToolDefinitions(config, token)
 
-    expect(Object.keys(result)).toHaveLength(4)
+    expect(Object.keys(result)).toHaveLength(5)
     expect(result).toHaveProperty('skill_list')
+    expect(result).toHaveProperty('skill_use')
     expect(result).toHaveProperty('skill_register')
     expect(result).toHaveProperty('skill_enable')
     expect(result).toHaveProperty('skill_disable')
@@ -487,6 +549,12 @@ describe('createSkillToolDefinitions', () => {
     const result = createSkillToolDefinitions(config, token)
 
     expect(result.skill_list.description).toBe('List all skills registered on the LiteLLM Skills Gateway')
+  })
+
+  it('skill_use has correct description', () => {
+    const result = createSkillToolDefinitions(config, token)
+
+    expect(result.skill_use.description).toContain('Load a skill')
   })
 
   it('skill_register has correct description', () => {
@@ -528,6 +596,48 @@ describe('createSkillToolDefinitions', () => {
     expect(output).toContain('security-scan')
     expect(output).toContain('Reviews code')
     expect(output).toContain('Scans security')
+  })
+
+  it('skill_use execute returns full SKILL.md content', async () => {
+    const mockContent = '# Brainstorming\n\nTurn ideas into designs.'
+
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ plugins: [mockSkill] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => mockContent,
+      })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = createSkillToolDefinitions(config, token)
+
+    const output = await result.skill_use.execute(
+      { name: 'code-review' },
+      {} as any,
+    )
+
+    expect(output).toContain('<skill name="code-review">')
+    expect(output).toContain(mockContent)
+  })
+
+  it('skill_use returns error when skill not found', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ plugins: [mockSkill] }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = createSkillToolDefinitions(config, token)
+
+    const output = await result.skill_use.execute(
+      { name: 'nonexistent' },
+      {} as any,
+    )
+
+    expect(output).toContain('not found')
   })
 
   it('skill_register execute calls registerSkill', async () => {
@@ -600,7 +710,7 @@ describe('createSkillsInjector', () => {
     resetSkillsCache()
   })
 
-  it('injects skills as text parts', async () => {
+  it('injects skills summary on first message', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -618,12 +728,34 @@ describe('createSkillsInjector', () => {
     const input = { sessionID: 'main-session' }
     const output: { message: any; parts: Array<{ type: string; text: string }> } = { message: { content: 'Hello' }, parts: [] }
 
-    await injector(input, output)
+    await injector.chatMessage(input, output)
 
     expect(output.parts).toHaveLength(1)
     expect(output.parts[0].type).toBe('text')
-    expect(output.parts[0].text).toContain('<skill name="code-review">Reviews code</skill>')
-    expect(output.parts[0].text).toContain('<skill name="security-scan">Scans security</skill>')
+    expect(output.parts[0].text).toContain('<available-skills>')
+    expect(output.parts[0].text).toContain('- code-review: Reviews code')
+    expect(output.parts[0].text).toContain('- security-scan: Scans security')
+  })
+
+  it('only injects once per session', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'code-review', description: 'Reviews code', enabled: true },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const injector = createSkillsInjector(config, token)
+
+    await injector.chatMessage({ sessionID: 'sess-1' }, { message: {}, parts: [] })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    await injector.chatMessage({ sessionID: 'sess-1' }, { message: {}, parts: [] })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
   it('skips ALL sub-agent sessions (returns when input.agent is truthy)', async () => {
@@ -639,7 +771,7 @@ describe('createSkillsInjector', () => {
     const input = { sessionID: 'main-session', agent: 'sub-agent-1' }
     const output = { message: { content: 'Hello' }, parts: [] }
 
-    await injector(input, output)
+    await injector.chatMessage(input, output)
 
     expect(output.parts).toEqual([])
     expect(mockFetch).not.toHaveBeenCalled()
@@ -662,7 +794,7 @@ describe('createSkillsInjector', () => {
     const input = { sessionID: 'main-session' }
     const output = { message: { content: 'Hello' }, parts: [] }
 
-    await injector(input, output)
+    await injector.chatMessage(input, output)
 
     expect(output.parts).toEqual([])
   })
@@ -684,12 +816,12 @@ describe('createSkillsInjector', () => {
     const input = { sessionID: 'main-session' }
     const output = { message: { content: 'Hello' }, parts: [] }
 
-    await injector(input, output)
+    await injector.chatMessage(input, output)
 
-    expect(output.parts[0].text).toContain('<skill name="no-desc-skill">No description</skill>')
+    expect((output.parts[0] as any).text).toContain('- no-desc-skill: No description')
   })
 
-  it('cache TTL works (second call within TTL uses cache)', async () => {
+  it('cache TTL works (second session within TTL uses cache)', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -703,10 +835,10 @@ describe('createSkillsInjector', () => {
 
     const injector = createSkillsInjector(config, token)
 
-    await injector({ sessionID: 'session-1' }, { message: {}, parts: [] })
+    await injector.chatMessage({ sessionID: 'session-1' }, { message: {}, parts: [] })
     expect(mockFetch).toHaveBeenCalledTimes(1)
 
-    await injector({ sessionID: 'session-2' }, { message: {}, parts: [] })
+    await injector.chatMessage({ sessionID: 'session-2' }, { message: {}, parts: [] })
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
@@ -719,7 +851,57 @@ describe('createSkillsInjector', () => {
     const input = { sessionID: 'main-session' }
     const output = { message: { content: 'Hello' }, parts: [] }
 
-    await expect(injector(input, output)).resolves.toBeUndefined()
+    await expect(injector.chatMessage(input, output)).resolves.toBeUndefined()
     expect(output.parts).toEqual([])
+  })
+
+  it('event handler resets session on compaction', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'code-review', description: 'Reviews code', enabled: true },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const injector = createSkillsInjector(config, token)
+
+    await injector.chatMessage({ sessionID: 'sess-1' }, { message: {}, parts: [] })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    await injector.event({ event: { type: 'session.compacted', properties: { sessionID: 'sess-1' } } })
+
+    resetSkillsCache()
+
+    await injector.chatMessage({ sessionID: 'sess-1' }, { message: {}, parts: [] })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('event handler resets session on deletion', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'code-review', description: 'Reviews code', enabled: true },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const injector = createSkillsInjector(config, token)
+
+    await injector.chatMessage({ sessionID: 'sess-1' }, { message: {}, parts: [] })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    await injector.event({ event: { type: 'session.deleted', properties: { info: { id: 'sess-1' } } } })
+
+    resetSkillsCache()
+
+    await injector.chatMessage({ sessionID: 'sess-1' }, { message: {}, parts: [] })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })

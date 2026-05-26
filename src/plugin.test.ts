@@ -23,7 +23,10 @@ vi.mock('./mcp-tools.js', () => ({
 // Mock the Skills module
 vi.mock('./skills.js', () => ({
   createSkillToolDefinitions: vi.fn(),
-  createSkillsInjector: vi.fn(),
+  createSkillsInjector: vi.fn().mockReturnValue({
+    chatMessage: vi.fn(),
+    event: vi.fn(),
+  }),
 }))
 
 import { LiteLLMPlugin } from './plugin.js'
@@ -86,7 +89,10 @@ describe('LiteLLMPlugin', () => {
       skill_delete: 'mock-skill-delete',
     })
     // Default Skills injector mock
-    vi.mocked(createSkillsInjector).mockReturnValue(vi.fn())
+    vi.mocked(createSkillsInjector).mockReturnValue({
+      chatMessage: vi.fn(),
+      event: vi.fn(),
+    })
   })
 
   it('throws on missing config', async () => {
@@ -145,7 +151,7 @@ describe('LiteLLMPlugin', () => {
         body: expect.objectContaining({
           service: 'litellm',
           level: 'warn',
-          message: expect.stringContaining('Model discovery failed'),
+          message: expect.stringContaining('Config setup failed'),
         }),
       }),
     )
@@ -171,6 +177,39 @@ describe('LiteLLMPlugin', () => {
         }),
       }),
     )
+  })
+
+  it('config hook injects skills URL into config', async () => {
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    const testConfig = {} as never
+    await hooks.config?.(testConfig)
+
+    expect((testConfig as any).skills.urls).toContain('https://litellm.example.com/opencode/skills')
+    expect(logFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          service: 'litellm',
+          level: 'info',
+          message: expect.stringContaining('Registered skills URL'),
+        }),
+      }),
+    )
+  })
+
+  it('config hook does not duplicate skills URL on second call', async () => {
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    const testConfig = { skills: { urls: ['https://litellm.example.com/opencode/skills'] } } as never
+    await hooks.config?.(testConfig)
+
+    expect((testConfig as any).skills.urls).toHaveLength(1)
   })
 
   it('auth hook returns success when API key is provided', async () => {
@@ -249,6 +288,16 @@ describe('LiteLLMPlugin', () => {
 
     expect(hooks['chat.message']).toBeDefined()
     expect(typeof hooks['chat.message']).toBe('function')
+  })
+
+  it('event hook is defined', async () => {
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(hooks.event).toBeDefined()
+    expect(typeof hooks.event).toBe('function')
   })
 
   it('chat.message hook is created with correct config and apiKey', async () => {

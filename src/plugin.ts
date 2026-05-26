@@ -40,7 +40,7 @@ export const LiteLLMPlugin: Plugin = async (
      * Config hook — discovers models from the LiteLLM proxy and injects
      * them into the OpenCode config under the provider.
      */
-    config: async (config) => {
+    config: async (config: Record<string, any>) => {
       try {
         const models = await discoverModels(
           pluginConfig,
@@ -55,29 +55,42 @@ export const LiteLLMPlugin: Plugin = async (
               message: 'No models discovered',
             },
           })
-          return
+        } else {
+          injectModelsIntoConfig(
+            config as Parameters<typeof injectModelsIntoConfig>[0],
+            providerId,
+            pluginConfig.url,
+            pluginConfig.apiKey,
+            models,
+          )
+          await input.client.app.log({
+            body: {
+              service: providerId,
+              level: 'info',
+              message: `Discovered ${Object.keys(models).length} models`,
+            },
+          })
         }
 
-        injectModelsIntoConfig(
-          config as Parameters<typeof injectModelsIntoConfig>[0],
-          providerId,
-          pluginConfig.url,
-          pluginConfig.apiKey,
-          models,
-        )
-        await input.client.app.log({
-          body: {
-            service: providerId,
-            level: 'info',
-            message: `Discovered ${Object.keys(models).length} models`,
-          },
-        })
+        const skillsUrl = `${pluginConfig.url}/opencode/skills`
+        config.skills = config.skills || {}
+        config.skills.urls = config.skills.urls || []
+        if (!config.skills.urls.includes(skillsUrl)) {
+          config.skills.urls.push(skillsUrl)
+          await input.client.app.log({
+            body: {
+              service: providerId,
+              level: 'info',
+              message: `Registered skills URL: ${skillsUrl}`,
+            },
+          })
+        }
       } catch (error) {
         await input.client.app.log({
           body: {
             service: providerId,
             level: 'warn',
-            message: `Model discovery failed: ${error}`,
+            message: `Config setup failed: ${error}`,
           },
         })
       }
@@ -121,8 +134,13 @@ export const LiteLLMPlugin: Plugin = async (
     },
 
     /**
-     * Chat message hook — injects active Skills as context into chat messages.
+     * Chat message hook — injects available skills summary once per session.
      */
-    "chat.message": createSkillsInjector(pluginConfig, pluginConfig.apiKey),
+    "chat.message": createSkillsInjector(pluginConfig, pluginConfig.apiKey).chatMessage,
+
+    /**
+     * Event hook — re-injects skills summary after session compaction.
+     */
+    event: createSkillsInjector(pluginConfig, pluginConfig.apiKey).event,
   }
 }

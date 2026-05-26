@@ -265,8 +265,26 @@ function extractBranch(url: string): string | null {
 }
 
 /**
+ * Looks up a skill by name and returns the full SKILL.md content.
+ */
+export async function loadSkillContent(
+  config: PluginConfig,
+  token: string,
+  name: string,
+): Promise<{ content: string; skill: Skill } | null> {
+  const skills = await listSkills(config, token)
+  const skill = skills.find((s) => s.name === name)
+  if (!skill) return null
+
+  const content = await fetchSkillContent(skill)
+  if (!content) return null
+
+  return { content, skill }
+}
+
+/**
  * Creates opencode tool definitions for skill management operations.
- * Returns tools: skill_list, skill_register, skill_enable, skill_disable.
+ * Returns tools: skill_list, skill_use, skill_register, skill_enable, skill_disable.
  */
 export function createSkillToolDefinitions(
   config: PluginConfig,
@@ -293,6 +311,23 @@ export function createSkillToolDefinitions(
           .join('\n')
 
         return [header, sep, ...rows.split('\n')].join('\n')
+      },
+    }),
+
+    skill_use: tool({
+      description: 'Load a skill from the LiteLLM Skills Gateway. Fetches the full SKILL.md content and injects it into context so the agent can follow the skill\'s instructions.',
+      args: {
+        name: tool.schema.string().describe('Name of the skill to load'),
+      },
+      async execute(args: Record<string, unknown>, _context: unknown): Promise<string> {
+        const name = args.name as string
+        const result = await loadSkillContent(config, token, name)
+
+        if (!result) {
+          return `Skill "${name}" not found or could not be loaded.`
+        }
+
+        return `<skill name="${result.skill.name}">\n${result.content}</skill>`
       },
     }),
 
@@ -341,20 +376,24 @@ export function createSkillToolDefinitions(
 }
 
 /**
- * Creates a chat.message hook that injects active skills as context.
+ * Creates a chat.message hook that injects available skills summary once per session.
  * Uses in-memory cache with 60s TTL to avoid hammering the API.
  * Only injects for main agent sessions — skips all sub-agents.
+ * Also returns an event handler for session lifecycle (compaction, deletion).
  */
 export function createSkillsInjector(
   config: PluginConfig,
   token: string,
-): (
-  input: { sessionID: string; agent?: string; model?: any; messageID?: string; variant?: string },
-  output: { message: any; parts: any[] },
-) => Promise<void> {
-  return async (input, output) => {
-    if (input.agent) return
+): {
+  chatMessage: (
+    input: { sessionID: string; agent?: string; model?: any; messageID?: string; variant?: string },
+    output: { message: any; parts: any[] },
+  ) => Promise<void>
+  event: (input: { event: { type: string; properties: Record<string, unknown> } }) => Promise<void>
+} {
+  const setupCompleteSessions = new Set<string>()
 
+  async function injectSkillsSummary(parts: any[]) {
     let skills: Skill[] = []
     if (skillsCache && Date.now() - skillsCache.timestamp < CACHE_TTL_MS) {
       skills = skillsCache.data
@@ -366,10 +405,35 @@ export function createSkillsInjector(
     const enabledSkills = skills.filter((s) => s.enabled !== false)
     if (enabledSkills.length === 0) return
 
-    const context = enabledSkills
-      .map((s) => `<skill name="${s.name}">${s.description || 'No description'}</skill>`)
+    const summary = enabledSkills
+      .map((s) => `- ${s.name}: ${s.description || 'No description'}`)
       .join('\n')
 
-    output.parts.push({ type: 'text', text: context })
+    parts.push({ type: 'text', text: `<available-skills>\n${summary}\n</available-skills>` })
+  }
+
+  return {
+    chatMessage: async (input, output) => {
+      if (input.agent) return
+      if (setupCompleteSessions.has(input.sessionID)) return
+
+      setupCompleteSessions.add(input.sessionID)
+      await injectSkillsSummary(output.parts)
+    },
+
+    event: async (input) => {
+      const { type, properties } = input.event
+      if (type === 'session.compacted') {
+        const sessionID = properties.sessionID as string
+        setupCompleteSessions.delete(sessionID)
+      }
+
+      if (type === 'session.deleted') {
+        const sessionID = (properties.info as any)?.id as string
+        if (sessionID) {
+          setupCompleteSessions.delete(sessionID)
+        }
+      }
+    },
   }
 }
