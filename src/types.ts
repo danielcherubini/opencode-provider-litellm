@@ -15,12 +15,27 @@ export interface McpTool {
   input_schema: Record<string, unknown>
 }
 
+export interface SkillSource {
+  source: string
+  url: string
+  path?: string
+}
+
 export interface Skill {
   id: string
   name: string
-  description: string
-  enabled?: boolean
-  [key: string]: unknown
+  version: string
+  description: string | null
+  source: SkillSource
+  author: string | null
+  homepage: string | null
+  keywords: string | null
+  category: string | null
+  domain: string | null
+  namespace: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface OpencodeModelConfig {

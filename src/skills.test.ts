@@ -3,12 +3,36 @@ import { tool } from '@opencode-ai/plugin'
 import type { PluginConfig, Skill } from './types.js'
 import {
   listSkills,
-  createSkill,
-  deleteSkill,
+  listPublicSkills,
+  registerSkill,
+  enableSkill,
+  disableSkill,
+  fetchSkillContent,
   createSkillToolDefinitions,
   createSkillsInjector,
   resetSkillsCache,
 } from './skills.js'
+
+const mockSkill: Skill = {
+  id: 'skill-1',
+  name: 'code-review',
+  version: '1.0.0',
+  description: 'Reviews code for best practices',
+  source: {
+    source: 'git-subdir',
+    url: 'https://github.com/org/repo',
+    path: 'skills/code-review',
+  },
+  author: null,
+  homepage: null,
+  keywords: null,
+  category: null,
+  domain: null,
+  namespace: null,
+  enabled: true,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
 
 describe('listSkills', () => {
   const config: PluginConfig = {
@@ -21,24 +45,21 @@ describe('listSkills', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns skills from mock response', async () => {
-    const mockSkills: Skill[] = [
-      { id: 'skill-1', name: 'code-review', description: 'Reviews code for best practices', enabled: true },
-      { id: 'skill-2', name: 'security-scan', description: 'Scans for security issues', enabled: true },
-    ]
+  it('returns skills from plugins response', async () => {
+    const mockPlugins = { plugins: [mockSkill] }
 
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => mockSkills,
+      json: async () => mockPlugins,
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const result = await listSkills(config, token)
 
-    expect(result).toEqual(mockSkills)
+    expect(result).toEqual([mockSkill])
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://litellm.example.com/v1/skills',
+      'https://litellm.example.com/claude-code/plugins',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -61,6 +82,18 @@ describe('listSkills', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await listSkills(config, token)
+    expect(result).toEqual([])
+  })
+
+  it('returns [] on invalid response format', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => { plugins: null },
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -95,7 +128,48 @@ describe('listSkills', () => {
   })
 })
 
-describe('createSkill', () => {
+describe('listPublicSkills', () => {
+  const config: PluginConfig = {
+    url: 'https://litellm.example.com',
+    apiKey: 'test-api-key',
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns public skills without auth', async () => {
+    const mockResponse = { plugins: [mockSkill] }
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockResponse,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await listPublicSkills(config)
+
+    expect(result).toEqual([mockSkill])
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://litellm.example.com/public/skill_hub',
+      expect.objectContaining({
+        method: 'GET',
+        signal: expect.any(AbortSignal),
+      }),
+    )
+  })
+
+  it('returns [] on error', async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error('network error'))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await listPublicSkills(config)
+    expect(result).toEqual([])
+  })
+})
+
+describe('registerSkill', () => {
   const config: PluginConfig = {
     url: 'https://litellm.example.com',
     apiKey: 'test-api-key',
@@ -110,22 +184,42 @@ describe('createSkill', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ id: 'skill-new-1', name: 'my-skill' }),
+      json: async () => ({
+        status: 'success',
+        action: 'created',
+        plugin: { id: 'new-skill-1', name: 'my-skill' },
+      }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createSkill(config, token, 'my-skill', 'A test skill')
+    const result = await registerSkill(
+      config,
+      token,
+      'my-skill',
+      'https://github.com/org/repo',
+      'skills/my-skill',
+      'A test skill',
+    )
 
-    expect(result).toBe('Skill "my-skill" created (id: skill-new-1)')
+    expect(result).toBe('Skill "my-skill" registered (id: new-skill-1)')
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://litellm.example.com/v1/skills',
+      'https://litellm.example.com/claude-code/plugins',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
           Authorization: 'Bearer test-token',
           'Content-Type': 'application/json',
         }),
-        body: JSON.stringify({ name: 'my-skill', description: 'A test skill', input_schema: undefined, code: undefined }),
+        body: JSON.stringify({
+          name: 'my-skill',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/org/repo',
+            path: 'skills/my-skill',
+          },
+          description: 'A test skill',
+          domain: null,
+        }),
         signal: expect.any(AbortSignal),
       }),
     )
@@ -135,9 +229,15 @@ describe('createSkill', () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error('connection refused'))
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createSkill(config, token, 'my-skill', 'A test skill')
+    const result = await registerSkill(
+      config,
+      token,
+      'my-skill',
+      'https://github.com/org/repo',
+      'skills/my-skill',
+    )
 
-    expect(result).toBe('Error creating skill: connection refused')
+    expect(result).toBe('Error registering skill: connection refused')
   })
 
   it('returns error string on non-ok response', async () => {
@@ -147,43 +247,54 @@ describe('createSkill', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createSkill(config, token, 'my-skill', 'A test skill')
+    const result = await registerSkill(
+      config,
+      token,
+      'my-skill',
+      'https://github.com/org/repo',
+      'skills/my-skill',
+    )
 
-    expect(result).toContain('Error creating skill')
+    expect(result).toContain('Error registering skill')
   })
 
-  it('includes input_schema and code when provided', async () => {
+  it('includes domain when provided', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ id: 'skill-3', name: 'complex-skill' }),
+      json: async () => ({ plugin: { id: 'skill-3', name: 'domain-skill' } }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    await createSkill(
+    await registerSkill(
       config,
       token,
-      'complex-skill',
-      'A complex skill',
-      { type: 'object', properties: { value: { type: 'string' } } },
-      'print("hello")',
+      'domain-skill',
+      'https://github.com/org/repo',
+      'skills/domain-skill',
+      'A domain skill',
+      'Productivity',
     )
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://litellm.example.com/v1/skills',
+      'https://litellm.example.com/claude-code/plugins',
       expect.objectContaining({
         body: JSON.stringify({
-          name: 'complex-skill',
-          description: 'A complex skill',
-          input_schema: { type: 'object', properties: { value: { type: 'string' } } },
-          code: 'print("hello")',
+          name: 'domain-skill',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/org/repo',
+            path: 'skills/domain-skill',
+          },
+          description: 'A domain skill',
+          domain: 'Productivity',
         }),
       }),
     )
   })
 })
 
-describe('deleteSkill', () => {
+describe('enableSkill', () => {
   const config: PluginConfig = {
     url: 'https://litellm.example.com',
     apiKey: 'test-api-key',
@@ -201,13 +312,13 @@ describe('deleteSkill', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await deleteSkill(config, token, 'skill-1')
+    const result = await enableSkill(config, token, 'my-skill')
 
-    expect(result).toBe('Skill "skill-1" deleted')
+    expect(result).toBe('Skill "my-skill" enabled')
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://litellm.example.com/v1/skills/skill-1',
+      'https://litellm.example.com/claude-code/plugins/my-skill/enable',
       expect.objectContaining({
-        method: 'DELETE',
+        method: 'POST',
         headers: expect.objectContaining({
           Authorization: 'Bearer test-token',
         }),
@@ -220,9 +331,9 @@ describe('deleteSkill', () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error('connection refused'))
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await deleteSkill(config, token, 'skill-1')
+    const result = await enableSkill(config, token, 'my-skill')
 
-    expect(result).toBe('Error deleting skill: connection refused')
+    expect(result).toBe('Error enabling skill: connection refused')
   })
 
   it('returns error string on non-ok response', async () => {
@@ -232,9 +343,122 @@ describe('deleteSkill', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await deleteSkill(config, token, 'skill-1')
+    const result = await enableSkill(config, token, 'my-skill')
 
-    expect(result).toContain('Error deleting skill')
+    expect(result).toContain('Error enabling skill')
+  })
+})
+
+describe('disableSkill', () => {
+  const config: PluginConfig = {
+    url: 'https://litellm.example.com',
+    apiKey: 'test-api-key',
+  }
+  const token = 'test-token'
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns success message', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await disableSkill(config, token, 'my-skill')
+
+    expect(result).toBe('Skill "my-skill" disabled')
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://litellm.example.com/claude-code/plugins/my-skill/disable',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+        }),
+        signal: expect.any(AbortSignal),
+      }),
+    )
+  })
+
+  it('returns error string on failure', async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error('connection refused'))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await disableSkill(config, token, 'my-skill')
+
+    expect(result).toBe('Error disabling skill: connection refused')
+  })
+
+  it('returns error string on non-ok response', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await disableSkill(config, token, 'my-skill')
+
+    expect(result).toContain('Error disabling skill')
+  })
+})
+
+describe('fetchSkillContent', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns SKILL.md content from GitHub', async () => {
+    const mockContent = '# Test Skill\n\nThis is a test skill.'
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => mockContent,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await fetchSkillContent(mockSkill)
+
+    expect(result).toBe(mockContent)
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://raw.githubusercontent.com/org/repo/master/skills/code-review/SKILL.md',
+      expect.any(Object),
+    )
+  })
+
+  it('returns null on non-ok response', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await fetchSkillContent(mockSkill)
+    expect(result).toBeNull()
+  })
+
+  it('returns null on network error', async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error('network error'))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await fetchSkillContent(mockSkill)
+    expect(result).toBeNull()
+  })
+
+  it('returns null for unsupported source type', async () => {
+    const mockFetch = vi.fn()
+    vi.stubGlobal('fetch', mockFetch)
+
+    const unsupportedSkill: Skill = {
+      ...mockSkill,
+      source: { source: 'inline', url: 'not-a-git-url' },
+    }
+
+    const result = await fetchSkillContent(unsupportedSkill)
+    expect(result).toBeNull()
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })
 
@@ -249,41 +473,50 @@ describe('createSkillToolDefinitions', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns 3 tools with correct names', () => {
+  it('returns 4 tools with correct names', () => {
     const result = createSkillToolDefinitions(config, token)
 
-    expect(Object.keys(result)).toHaveLength(3)
+    expect(Object.keys(result)).toHaveLength(4)
     expect(result).toHaveProperty('skill_list')
-    expect(result).toHaveProperty('skill_create')
-    expect(result).toHaveProperty('skill_delete')
+    expect(result).toHaveProperty('skill_register')
+    expect(result).toHaveProperty('skill_enable')
+    expect(result).toHaveProperty('skill_disable')
   })
 
   it('skill_list has correct description', () => {
     const result = createSkillToolDefinitions(config, token)
 
-    expect(result.skill_list.description).toBe('List all skills registered on the LiteLLM proxy')
+    expect(result.skill_list.description).toBe('List all skills registered on the LiteLLM Skills Gateway')
   })
 
-  it('skill_create has correct description', () => {
+  it('skill_register has correct description', () => {
     const result = createSkillToolDefinitions(config, token)
 
-    expect(result.skill_create.description).toBe('Create a new skill on the LiteLLM proxy')
+    expect(result.skill_register.description).toBe('Register a new skill on the LiteLLM Skills Gateway pointing to a git source')
   })
 
-  it('skill_delete has correct description', () => {
+  it('skill_enable has correct description', () => {
     const result = createSkillToolDefinitions(config, token)
 
-    expect(result.skill_delete.description).toBe('Delete a skill from the LiteLLM proxy')
+    expect(result.skill_enable.description).toBe('Enable (publish) a skill on the LiteLLM Skills Gateway')
+  })
+
+  it('skill_disable has correct description', () => {
+    const result = createSkillToolDefinitions(config, token)
+
+    expect(result.skill_disable.description).toBe('Disable (unpublish) a skill on the LiteLLM Skills Gateway')
   })
 
   it('skill_list execute returns formatted markdown table', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        { id: 'skill-1', name: 'code-review', description: 'Reviews code', enabled: true },
-        { id: 'skill-2', name: 'security-scan', description: 'Scans security', enabled: false },
-      ],
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'code-review', description: 'Reviews code', enabled: true },
+          { ...mockSkill, name: 'security-scan', description: 'Scans security', enabled: false },
+        ],
+      }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -297,25 +530,30 @@ describe('createSkillToolDefinitions', () => {
     expect(output).toContain('Scans security')
   })
 
-  it('skill_create execute calls createSkill', async () => {
+  it('skill_register execute calls registerSkill', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ id: 'skill-new', name: 'new-skill' }),
+      json: async () => ({ plugin: { id: 'new-skill', name: 'new-skill' } }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const result = createSkillToolDefinitions(config, token)
 
-    const output = await result.skill_create.execute(
-      { name: 'new-skill', description: 'A new skill' },
+    const output = await result.skill_register.execute(
+      {
+        name: 'new-skill',
+        git_url: 'https://github.com/org/repo',
+        git_path: 'skills/new-skill',
+        description: 'A new skill',
+      },
       {} as any,
     )
 
-    expect(output).toBe('Skill "new-skill" created (id: skill-new)')
+    expect(output).toBe('Skill "new-skill" registered (id: new-skill)')
   })
 
-  it('skill_delete execute calls deleteSkill', async () => {
+  it('skill_enable execute calls enableSkill', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -324,12 +562,29 @@ describe('createSkillToolDefinitions', () => {
 
     const result = createSkillToolDefinitions(config, token)
 
-    const output = await result.skill_delete.execute(
-      { skill_id: 'skill-to-delete' },
+    const output = await result.skill_enable.execute(
+      { name: 'skill-to-enable' },
       {} as any,
     )
 
-    expect(output).toBe('Skill "skill-to-delete" deleted')
+    expect(output).toBe('Skill "skill-to-enable" enabled')
+  })
+
+  it('skill_disable execute calls disableSkill', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = createSkillToolDefinitions(config, token)
+
+    const output = await result.skill_disable.execute(
+      { name: 'skill-to-disable' },
+      {} as any,
+    )
+
+    expect(output).toBe('Skill "skill-to-disable" disabled')
   })
 })
 
@@ -349,10 +604,12 @@ describe('createSkillsInjector', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        { id: 'skill-1', name: 'code-review', description: 'Reviews code', enabled: true },
-        { id: 'skill-2', name: 'security-scan', description: 'Scans security' },
-      ],
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'code-review', description: 'Reviews code', enabled: true },
+          { ...mockSkill, name: 'security-scan', description: 'Scans security', enabled: true },
+        ],
+      }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -373,9 +630,7 @@ describe('createSkillsInjector', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        { id: 'skill-1', name: 'code-review', description: 'Reviews code', enabled: true },
-      ],
+      json: async () => ({ plugins: [mockSkill] }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -386,9 +641,7 @@ describe('createSkillsInjector', () => {
 
     await injector(input, output)
 
-    // Should not have injected anything — sub-agent sessions are skipped
     expect(output.parts).toEqual([])
-    // Should not have called fetch since it returns early
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
@@ -396,9 +649,11 @@ describe('createSkillsInjector', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        { id: 'skill-1', name: 'disabled-skill', description: 'Disabled', enabled: false },
-      ],
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'disabled-skill', description: 'Disabled', enabled: false },
+        ],
+      }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -412,23 +667,45 @@ describe('createSkillsInjector', () => {
     expect(output.parts).toEqual([])
   })
 
-  it('cache TTL works (second call within TTL uses cache)', async () => {
+  it('uses "No description" for null descriptions', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => [
-        { id: 'skill-1', name: 'cached-skill', description: 'Cached', enabled: true },
-      ],
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'no-desc-skill', description: null, enabled: true },
+        ],
+      }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const injector = createSkillsInjector(config, token)
 
-    // First call — should fetch
+    const input = { sessionID: 'main-session' }
+    const output = { message: { content: 'Hello' }, parts: [] }
+
+    await injector(input, output)
+
+    expect(output.parts[0].text).toContain('<skill name="no-desc-skill">No description</skill>')
+  })
+
+  it('cache TTL works (second call within TTL uses cache)', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        plugins: [
+          { ...mockSkill, name: 'cached-skill', description: 'Cached', enabled: true },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const injector = createSkillsInjector(config, token)
+
     await injector({ sessionID: 'session-1' }, { message: {}, parts: [] })
     expect(mockFetch).toHaveBeenCalledTimes(1)
 
-    // Second call — should use cache (fetch not called again)
     await injector({ sessionID: 'session-2' }, { message: {}, parts: [] })
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
@@ -442,7 +719,6 @@ describe('createSkillsInjector', () => {
     const input = { sessionID: 'main-session' }
     const output = { message: { content: 'Hello' }, parts: [] }
 
-    // Should not throw
     await expect(injector(input, output)).resolves.toBeUndefined()
     expect(output.parts).toEqual([])
   })
