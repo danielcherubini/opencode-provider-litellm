@@ -2,7 +2,6 @@ import type { Plugin, PluginInput, PluginOptions } from '@opencode-ai/plugin'
 import { resolvePluginConfig, getProviderId } from './utils.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { createMcpToolDefinitions } from './mcp-tools.js'
-import { createSkillToolDefinitions } from './skills.js'
 
 export const LiteLLMPlugin: Plugin = async (
   input: PluginInput,
@@ -94,7 +93,6 @@ export const LiteLLMPlugin: Plugin = async (
 
     tool: {
       ...mcpTools,
-      ...createSkillToolDefinitions(pluginConfig, pluginConfig.apiKey),
     },
   }
 }
