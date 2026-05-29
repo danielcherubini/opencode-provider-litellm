@@ -1,23 +1,9 @@
 import { tool } from '@opencode-ai/plugin'
 import type { PluginConfig, Skill } from './types.js'
 
-interface CacheEntry<T> {
-  data: T
-  timestamp: number
-}
-
-let skillsCache: CacheEntry<Skill[]> | null = null
-const CACHE_TTL_MS = 60_000
-
-/** Reset the skills cache. Used for testing. */
-export function resetSkillsCache(): void {
-  skillsCache = null
-}
-
 /**
  * Fetches all skills from the LiteLLM Skills Gateway.
- * Returns an empty array on any error (network, 4xx, 5xx, parse failure).
- * Uses a 10s timeout via AbortController.
+ * Returns an empty array on any error.
  */
 export async function listSkills(
   config: PluginConfig,
@@ -29,53 +15,14 @@ export async function listSkills(
   try {
     const response = await fetch(`${config.url}/claude-code/plugins`, {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
 
-    if (!response.ok) {
-      return []
-    }
+    if (!response.ok) return []
 
     const body = await response.json()
-
-    if (!body || !Array.isArray(body.plugins)) {
-      return []
-    }
-
-    return body.plugins as Skill[]
-  } catch {
-    return []
-  } finally {
-    clearTimeout(timeoutId)
-  }
-}
-
-/**
- * Fetches only enabled (public) skills from the LiteLLM Skill Hub.
- * No auth required. Useful for discovery without credentials.
- */
-export async function listPublicSkills(config: PluginConfig): Promise<Skill[]> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10_000)
-
-  try {
-    const response = await fetch(`${config.url}/public/skill_hub`, {
-      method: 'GET',
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      return []
-    }
-
-    const body = await response.json()
-
-    if (!body || !Array.isArray(body.plugins)) {
-      return []
-    }
+    if (!body || !Array.isArray(body.plugins)) return []
 
     return body.plugins as Skill[]
   } catch {
@@ -87,7 +34,6 @@ export async function listPublicSkills(config: PluginConfig): Promise<Skill[]> {
 
 /**
  * Registers a new skill on the LiteLLM Skills Gateway.
- * The skill points to a git source containing a SKILL.md file.
  */
 export async function registerSkill(
   config: PluginConfig,
@@ -110,20 +56,14 @@ export async function registerSkill(
       },
       body: JSON.stringify({
         name,
-        source: {
-          source: 'git-subdir',
-          url: gitUrl,
-          path: gitPath,
-        },
+        source: { source: 'git-subdir', url: gitUrl, path: gitPath },
         description: description || null,
         domain: domain || null,
       }),
       signal: controller.signal,
     })
 
-    if (!response.ok) {
-      return `Error registering skill: HTTP ${response.status}`
-    }
+    if (!response.ok) return `Error registering skill: HTTP ${response.status}`
 
     const body = await response.json()
     const id = body?.plugin?.id ?? 'unknown'
@@ -150,16 +90,11 @@ export async function enableSkill(
   try {
     const response = await fetch(`${config.url}/claude-code/plugins/${name}/enable`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
 
-    if (!response.ok) {
-      return `Error enabling skill: HTTP ${response.status}`
-    }
-
+    if (!response.ok) return `Error enabling skill: HTTP ${response.status}`
     return `Skill "${name}" enabled`
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
@@ -183,16 +118,11 @@ export async function disableSkill(
   try {
     const response = await fetch(`${config.url}/claude-code/plugins/${name}/disable`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
 
-    if (!response.ok) {
-      return `Error disabling skill: HTTP ${response.status}`
-    }
-
+    if (!response.ok) return `Error disabling skill: HTTP ${response.status}`
     return `Skill "${name}" disabled`
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
@@ -203,88 +133,8 @@ export async function disableSkill(
 }
 
 /**
- * Fetches the SKILL.md content from a skill's git source.
- * Currently supports GitHub raw URLs.
- */
-export async function fetchSkillContent(skill: Skill): Promise<string | null> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10_000)
-
-  try {
-    const rawUrl = buildRawGitUrl(skill.source)
-    if (!rawUrl) return null
-
-    const response = await fetch(rawUrl, {
-      signal: controller.signal,
-    })
-
-    if (!response.ok) return null
-
-    return await response.text()
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timeoutId)
-  }
-}
-
-/**
- * Builds a raw git URL for the SKILL.md file from a skill's source.
- * Currently supports GitHub git-subdir sources.
- */
-function buildRawGitUrl(source: Skill['source']): string | null {
-  if (source.source !== 'git-subdir') return null
-
-  const url = source.url
-  if (!url.includes('github.com')) return null
-
-  const isRaw = url.startsWith('https://raw.githubusercontent.com')
-  if (isRaw) {
-    const branch = extractBranch(url)
-    const path = source.path || ''
-    return `https://raw.githubusercontent.com/${url.replace('https://raw.githubusercontent.com/', '').split('/').slice(0, 2).join('/')}/${branch}/${path}/SKILL.md`
-  }
-
-  const match = url.match(/https:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/.*)?/)
-  if (!match) return null
-
-  const [, owner, repo] = match
-  const branch = extractBranch(url) || 'master'
-  const path = source.path || ''
-
-  return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}/SKILL.md`
-}
-
-/**
- * Extracts the branch name from a GitHub URL.
- * Falls back to 'master' if not found.
- */
-function extractBranch(url: string): string | null {
-  const match = url.match(/\/tree\/([^/]+)/)
-  return match ? match[1] : null
-}
-
-/**
- * Looks up a skill by name and returns the full SKILL.md content.
- */
-export async function loadSkillContent(
-  config: PluginConfig,
-  token: string,
-  name: string,
-): Promise<{ content: string; skill: Skill } | null> {
-  const skills = await listSkills(config, token)
-  const skill = skills.find((s) => s.name === name)
-  if (!skill) return null
-
-  const content = await fetchSkillContent(skill)
-  if (!content) return null
-
-  return { content, skill }
-}
-
-/**
- * Creates opencode tool definitions for skill management operations.
- * Returns tools: skill_list, skill_use, skill_register, skill_enable, skill_disable.
+ * Creates opencode tool definitions for skill management.
+ * Returns tools: skill_list, skill_register, skill_enable, skill_disable.
  */
 export function createSkillToolDefinitions(
   config: PluginConfig,
@@ -311,23 +161,6 @@ export function createSkillToolDefinitions(
           .join('\n')
 
         return [header, sep, ...rows.split('\n')].join('\n')
-      },
-    }),
-
-    skill_use: tool({
-      description: 'Load a skill from the LiteLLM Skills Gateway. Fetches the full SKILL.md content and injects it into context so the agent can follow the skill\'s instructions.',
-      args: {
-        name: tool.schema.string().describe('Name of the skill to load'),
-      },
-      async execute(args: Record<string, unknown>, _context: unknown): Promise<string> {
-        const name = args.name as string
-        const result = await loadSkillContent(config, token, name)
-
-        if (!result) {
-          return `Skill "${name}" not found or could not be loaded.`
-        }
-
-        return `<skill name="${result.skill.name}">\n${result.content}</skill>`
       },
     }),
 
@@ -372,68 +205,5 @@ export function createSkillToolDefinitions(
         return disableSkill(config, token, args.name as string)
       },
     }),
-  }
-}
-
-/**
- * Creates a chat.message hook that injects available skills summary once per session.
- * Uses in-memory cache with 60s TTL to avoid hammering the API.
- * Only injects for main agent sessions — skips all sub-agents.
- * Also returns an event handler for session lifecycle (compaction, deletion).
- */
-export function createSkillsInjector(
-  config: PluginConfig,
-  token: string,
-): {
-  chatMessage: (
-    input: { sessionID: string; agent?: string; model?: any; messageID?: string; variant?: string },
-    output: { message: any; parts: any[] },
-  ) => Promise<void>
-  event: (input: { event: { type: string; properties: Record<string, unknown> } }) => Promise<void>
-} {
-  const setupCompleteSessions = new Set<string>()
-
-  async function injectSkillsSummary(parts: any[]) {
-    let skills: Skill[] = []
-    if (skillsCache && Date.now() - skillsCache.timestamp < CACHE_TTL_MS) {
-      skills = skillsCache.data
-    } else {
-      skills = await listSkills(config, token)
-      skillsCache = { data: skills, timestamp: Date.now() }
-    }
-
-    const enabledSkills = skills.filter((s) => s.enabled !== false)
-    if (enabledSkills.length === 0) return
-
-    const summary = enabledSkills
-      .map((s) => `- ${s.name}: ${s.description || 'No description'}`)
-      .join('\n')
-
-    parts.push({ type: 'text', text: `<available-skills>\n${summary}\n</available-skills>` })
-  }
-
-  return {
-    chatMessage: async (input, output) => {
-      if (input.agent) return
-      if (setupCompleteSessions.has(input.sessionID)) return
-
-      setupCompleteSessions.add(input.sessionID)
-      await injectSkillsSummary(output.parts)
-    },
-
-    event: async (input) => {
-      const { type, properties } = input.event
-      if (type === 'session.compacted') {
-        const sessionID = properties.sessionID as string
-        setupCompleteSessions.delete(sessionID)
-      }
-
-      if (type === 'session.deleted') {
-        const sessionID = (properties.info as any)?.id as string
-        if (sessionID) {
-          setupCompleteSessions.delete(sessionID)
-        }
-      }
-    },
   }
 }

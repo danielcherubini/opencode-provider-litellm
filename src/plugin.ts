@@ -2,17 +2,8 @@ import type { Plugin, PluginInput, PluginOptions } from '@opencode-ai/plugin'
 import { resolvePluginConfig, getProviderId } from './utils.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { createMcpToolDefinitions } from './mcp-tools.js'
-import { createSkillToolDefinitions, createSkillsInjector } from './skills.js'
+import { createSkillToolDefinitions } from './skills.js'
 
-/**
- * Main plugin entry point for the LiteLLM provider.
- *
- * Wires together config (model discovery), auth (/connect API key flow),
- * and chat.headers (per-request Bearer token injection).
- *
- * Auth: LITELLM_URL / LITELLM_KEY env vars take precedence,
- * with fallback to values in opencode.json plugin options.
- */
 export const LiteLLMPlugin: Plugin = async (
   input: PluginInput,
   options?: PluginOptions,
@@ -27,7 +18,6 @@ export const LiteLLMPlugin: Plugin = async (
 
   const providerId = getProviderId()
 
-  // Discover MCP tools with graceful error handling
   let mcpTools: Record<string, any> = {}
   try {
     mcpTools = await createMcpToolDefinitions(pluginConfig, pluginConfig.apiKey)
@@ -36,10 +26,6 @@ export const LiteLLMPlugin: Plugin = async (
   }
 
   return {
-    /**
-     * Config hook — discovers models from the LiteLLM proxy and injects
-     * them into the OpenCode config under the provider.
-     */
     config: async (config: Record<string, any>) => {
       try {
         const models = await discoverModels(
@@ -71,35 +57,17 @@ export const LiteLLMPlugin: Plugin = async (
             },
           })
         }
-
-        const skillsUrl = `${pluginConfig.url}/opencode/skills`
-        config.skills = config.skills || {}
-        config.skills.urls = config.skills.urls || []
-        if (!config.skills.urls.includes(skillsUrl)) {
-          config.skills.urls.push(skillsUrl)
-          await input.client.app.log({
-            body: {
-              service: providerId,
-              level: 'info',
-              message: `Registered skills URL: ${skillsUrl}`,
-            },
-          })
-        }
       } catch (error) {
         await input.client.app.log({
           body: {
             service: providerId,
             level: 'warn',
-            message: `Config setup failed: ${error}`,
+            message: `Model discovery failed: ${error}`,
           },
         })
       }
     },
 
-    /**
-     * Auth hook — lets the user paste an API key via the /connect flow.
-     * The key is stored in OpenCode's auth store and used as the Bearer token.
-     */
     auth: {
       provider: providerId,
       methods: [
@@ -124,23 +92,9 @@ export const LiteLLMPlugin: Plugin = async (
       ],
     },
 
-    /**
-     * Tool hook — merges dynamically-discovered MCP tools with static
-     * Skills CRUD tools.
-     */
     tool: {
       ...mcpTools,
       ...createSkillToolDefinitions(pluginConfig, pluginConfig.apiKey),
     },
-
-    /**
-     * Chat message hook — injects available skills summary once per session.
-     */
-    "chat.message": createSkillsInjector(pluginConfig, pluginConfig.apiKey).chatMessage,
-
-    /**
-     * Event hook — re-injects skills summary after session compaction.
-     */
-    event: createSkillsInjector(pluginConfig, pluginConfig.apiKey).event,
   }
 }
