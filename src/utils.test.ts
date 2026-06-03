@@ -55,6 +55,10 @@ describe('resolvePluginConfig', () => {
   })
 
   describe('environment variable priority', () => {
+    beforeEach(() => {
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    })
+
     it('returns config from env vars when both are set', () => {
       process.env.LITELLM_URL = 'https://env.example.com'
       process.env.LITELLM_KEY = 'env-key-123'
