@@ -2,13 +2,15 @@
 
 ## Quick Stats
 
-- **Total Plans:** 2
-- **In Progress:** 0
+- **Total Plans:** 3
+- **In Progress:** 1
 - **Completed:** 2
 
 ## Active Plans
 
-*(none)*
+| Plan | Status | Date |
+|------|--------|------|
+| [Model Discovery Cache](./2026-06-03-model-cache.md) | 🚧 IN PROGRESS | 2026-06-03 |
 
 ## Completed Plans
 
