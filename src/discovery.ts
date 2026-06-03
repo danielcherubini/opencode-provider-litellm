@@ -117,16 +117,17 @@ export async function discoverModels(
       }
 
       // Add cost info if available
+      // LiteLLM returns cost per single token; opencode expects cost per 1M tokens
       if (info.input_cost_per_token != null && info.output_cost_per_token != null) {
         modelConfig.cost = {
-          input: info.input_cost_per_token,
-          output: info.output_cost_per_token,
+          input: info.input_cost_per_token * 1_000_000,
+          output: info.output_cost_per_token * 1_000_000,
         }
         if (info.cache_read_input_token_cost != null) {
-          modelConfig.cost.cache_read = info.cache_read_input_token_cost
+          modelConfig.cost.cache_read = info.cache_read_input_token_cost * 1_000_000
         }
         if (info.cache_creation_input_token_cost != null) {
-          modelConfig.cost.cache_write = info.cache_creation_input_token_cost
+          modelConfig.cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
         }
       }
 

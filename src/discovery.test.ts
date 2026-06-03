@@ -83,7 +83,7 @@ describe('discoverModels', () => {
         tool_call: true,
         reasoning: false,
         limit: { context: 8192, output: 8192 },
-        cost: { input: 0.0001, output: 0.0003 },
+        cost: { input: 100, output: 300 },
         modalities: { input: ['text'], output: ['text'] },
       },
       'qwen3-32b': {
@@ -91,7 +91,7 @@ describe('discoverModels', () => {
         tool_call: true,
         reasoning: true,
         limit: { context: 32768, output: 32768 },
-        cost: { input: 0.00005, output: 0.00015 },
+        cost: { input: 50, output: 150 },
         modalities: { input: ['text'], output: ['text'] },
       },
     })
@@ -105,6 +105,51 @@ describe('discoverModels', () => {
       })
     )
     expect(getToken).toHaveBeenCalled()
+  })
+
+  it('converts per-token cost to per-1M tokens with cache costs', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          healthy_endpoints: [
+            { model: 'anthropic/claude-sonnet', model_id: 'uuid-1' },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{
+            model_name: 'anthropic/claude-sonnet',
+            model_info: {
+              max_input_tokens: 1_000_000,
+              max_output_tokens: 64_000,
+              supports_function_calling: true,
+              supports_reasoning: true,
+              supports_vision: true,
+              supports_pdf_input: true,
+              // Per-token costs (LiteLLM format)
+              input_cost_per_token: 0.000005,
+              output_cost_per_token: 0.000025,
+              cache_read_input_token_cost: 0.0000005,
+              cache_creation_input_token_cost: 0.00000375,
+            },
+          }],
+        }),
+      })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await discoverModels(config, getToken)
+
+    expect(result['anthropic/claude-sonnet']?.cost).toEqual({
+      input: 5,         // 0.000005 * 1M
+      output: 25,       // 0.000025 * 1M
+      cache_read: 0.5,  // 0.0000005 * 1M
+      cache_write: 3.75, // 0.00000375 * 1M
+    })
   })
 
   it('returns empty object on timeout', async () => {
