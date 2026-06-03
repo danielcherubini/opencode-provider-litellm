@@ -44,9 +44,7 @@ Alternatively, provide `url` and `apiKey` directly in your `opencode.json`:
 }
 ```
 
-:::tip
-Environment variables take precedence over inline config. Use env vars to keep secrets out of checked-in files.
-:::
+> **Tip:** Environment variables take precedence over inline config. Use env vars to keep secrets out of checked-in files.
 
 ### Google Vertex AI (gcloud token auth)
 
@@ -68,9 +66,7 @@ The plugin reads your [Application Default Credentials](https://cloud.google.com
 
 To use a custom credentials file, set `GOOGLE_APPLICATION_CREDENTIALS` to its path.
 
-:::note
-Only `authorized_user` credentials (from `gcloud auth application-default login`) are supported. Service account keys are not yet supported.
-:::
+> **Note:** Only `authorized_user` credentials (from `gcloud auth application-default login`) are supported. Service account keys are not yet supported.
 
 ### /connect flow
 
