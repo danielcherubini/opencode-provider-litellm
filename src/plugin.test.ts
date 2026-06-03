@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeEach } from 'vitest'
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { OpencodeModelConfig } from './types.js'
 
@@ -18,6 +18,12 @@ vi.mock('./utils.js', () => ({
 // Mock the MCP tools module
 vi.mock('./mcp-tools.js', () => ({
   createMcpToolDefinitions: vi.fn(),
+}))
+
+// Mock the gcloud token module
+vi.mock('./gcloud-token.js', () => ({
+  getGcloudToken: vi.fn(),
+  resetTokenCache: vi.fn(),
 }))
 
 import { LiteLLMPlugin } from './plugin.js'
@@ -74,8 +80,34 @@ describe('LiteLLMPlugin', () => {
     })
   })
 
+  afterEach(() => {
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+  })
+
   it('throws on missing config', async () => {
     vi.mocked(resolvePluginConfig).mockReturnValue(null)
+
+    await expect(
+      LiteLLMPlugin(mockInput, {})
+    ).rejects.toThrow(
+      "Plugin config error: set 'url' and 'apiKey'",
+    )
+  })
+
+  it('throws gcloud-specific error when LITELLM_GCLOUD_TOKEN_AUTH is set but config is missing', async () => {
+    vi.mocked(resolvePluginConfig).mockReturnValue(null)
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+
+    await expect(
+      LiteLLMPlugin(mockInput, {})
+    ).rejects.toThrow(
+      'LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1',
+    )
+  })
+
+  it('throws generic error when LITELLM_GCLOUD_TOKEN_AUTH is not set and config is missing', async () => {
+    vi.mocked(resolvePluginConfig).mockReturnValue(null)
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
 
     await expect(
       LiteLLMPlugin(mockInput, {})
@@ -251,5 +283,36 @@ describe('LiteLLMPlugin', () => {
 
     delete process.env.LITELLM_URL
     delete process.env.LITELLM_KEY
+  })
+
+  it('registers chat.headers hook when LITELLM_GCLOUD_TOKEN_AUTH is set', async () => {
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+
+    const { getGcloudToken } = await import('./gcloud-token.js')
+    vi.mocked(getGcloudToken).mockResolvedValue('mock-gcloud-token')
+
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(hooks['chat.headers']).toBeDefined()
+    expect(typeof hooks['chat.headers']).toBe('function')
+
+    // Verify the hook injects the token
+    const output = { headers: {} as Record<string, string> }
+    await (hooks['chat.headers'] as Function)({}, output)
+    expect(output.headers['Authorization']).toBe('Bearer mock-gcloud-token')
+  })
+
+  it('does not register chat.headers hook when LITELLM_GCLOUD_TOKEN_AUTH is unset', async () => {
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+
+    const hooks = await LiteLLMPlugin(mockInput, {
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
+
+    expect(hooks['chat.headers']).toBeUndefined()
   })
 })

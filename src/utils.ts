@@ -34,12 +34,21 @@ export function mapLiteLLMModel(model: LiteLLMModel): OpencodeModelConfig {
 export function resolvePluginConfig(rawConfig: unknown): PluginConfig | null {
   const envUrl = typeof process !== 'undefined' ? process.env.LITELLM_URL : undefined
   const envKey = typeof process !== 'undefined' ? process.env.LITELLM_KEY : undefined
+  const envGcloudAuth = typeof process !== 'undefined'
+    ? process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    : undefined
 
   const hasEnvVars = envUrl !== undefined && envUrl.length > 0 &&
-                     envKey !== undefined && envKey.length > 0
+                      envKey !== undefined && envKey.length > 0
 
   if (hasEnvVars) {
     return { url: envUrl, apiKey: envKey }
+  }
+
+  // Allow missing LITELLM_KEY when gcloud token auth is enabled
+  if (envUrl !== undefined && envUrl.length > 0 &&
+      envGcloudAuth !== undefined && envGcloudAuth !== '' && envGcloudAuth !== '0') {
+    return { url: envUrl, apiKey: envKey || '' }
   }
 
   // Fall back to config options from opencode.json
