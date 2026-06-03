@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { getGcloudToken, resetTokenCache, CACHE_TTL } from './gcloud-token.js'
 
 const mockReadFileSync = vi.hoisted(() => vi.fn())
+const mockExistsSync = vi.hoisted(() => vi.fn())
 const mockFetch = vi.hoisted(() => vi.fn())
 
 vi.mock('fs', () => ({
   get readFileSync() { return mockReadFileSync },
+  get existsSync() { return mockExistsSync },
 }))
 
 // Mock global fetch
@@ -109,6 +111,7 @@ describe('getGcloudToken', () => {
       GOOGLE_APPLICATION_CREDENTIALS: undefined,
       HOME: undefined,
       USERPROFILE: undefined,
+      APPDATA: undefined,
     })
 
     const token = await getGcloudToken()
@@ -203,8 +206,10 @@ describe('getGcloudToken', () => {
     const restore = mockEnv({
       GOOGLE_APPLICATION_CREDENTIALS: undefined,
       HOME: '/home/test',
+      APPDATA: undefined,
     })
 
+    mockExistsSync.mockReturnValue(true)
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
     mockFetch.mockResolvedValue({
       ok: true,
@@ -215,6 +220,33 @@ describe('getGcloudToken', () => {
     expect(token).toBe('default-loc-token')
     expect(mockReadFileSync).toHaveBeenCalledWith(
       expect.stringContaining('application_default_credentials.json'),
+      'utf-8',
+    )
+
+    restore()
+  })
+
+  it('reads Windows APPDATA ADC location', async () => {
+    const restore = mockEnv({
+      GOOGLE_APPLICATION_CREDENTIALS: undefined,
+      HOME: undefined,
+      APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
+    })
+
+    mockExistsSync.mockImplementation((path: string) => {
+      return typeof path === 'string' && path.includes('AppData') && path.includes('gcloud')
+    })
+    mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'windows-token' }),
+    })
+
+    const token = await getGcloudToken()
+    expect(token).toBe('windows-token')
+    // On Linux, path.join mixes slashes; just check it contains the key parts
+    expect(mockReadFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('gcloud'),
       'utf-8',
     )
 

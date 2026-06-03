@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
 let cachedToken: string | null = null
@@ -20,20 +20,37 @@ interface ServiceAccountCredentials {
 
 type GoogleCredentials = AuthorizedUserCredentials | ServiceAccountCredentials
 
+const ADC_FILENAME = 'application_default_credentials.json'
+
 function getAdcPath(): string | null {
-  // Check GOOGLE_APPLICATION_CREDENTIALS first
+  // 1. GOOGLE_APPLICATION_CREDENTIALS env var (all platforms)
   const envPath = typeof process !== 'undefined' ? process.env.GOOGLE_APPLICATION_CREDENTIALS : undefined
   if (envPath) {
     return envPath
   }
 
-  // Default ADC location
-  const home = typeof process !== 'undefined' ? process.env.HOME || process.env.USERPROFILE : undefined
-  if (!home) {
-    return null
+  // 2. Default ADC locations (Google's official search order)
+  const candidates: string[] = []
+
+  // Linux / macOS: ~/.config/gcloud/
+  const home = typeof process !== 'undefined' ? process.env.HOME : undefined
+  if (home) {
+    candidates.push(join(home, '.config', 'gcloud', ADC_FILENAME))
   }
 
-  return join(home, '.config', 'gcloud', 'application_default_credentials.json')
+  // Windows: %APPDATA%/gcloud/
+  const appData = typeof process !== 'undefined' ? process.env.APPDATA : undefined
+  if (appData) {
+    candidates.push(join(appData, 'gcloud', ADC_FILENAME))
+  }
+
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      return path
+    }
+  }
+
+  return null
 }
 
 function readCredentials(path: string): GoogleCredentials | null {
