@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { getGcloudToken, resetTokenCache } from './gcloud-token.js'
 
 const mockExec = vi.hoisted(() => vi.fn())
@@ -13,6 +13,9 @@ beforeEach(() => {
 })
 
 describe('getGcloudToken', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
   it('returns token from gcloud', async () => {
     mockExec.mockImplementation(
       function (cmd: string, opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) {

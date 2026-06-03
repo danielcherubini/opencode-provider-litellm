@@ -2,7 +2,7 @@ import { exec } from 'child_process'
 
 let cachedToken: string | null = null
 let cachedAt: number = 0
-const CACHE_TTL = 50 * 60 * 1000 // 50 minutes in ms
+export const CACHE_TTL = 50 * 60 * 1000 // 50 minutes in ms
 
 /**
  * Runs exec as a Promise, returning { stdout, stderr }.

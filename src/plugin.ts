@@ -101,7 +101,7 @@ export const LiteLLMPlugin: Plugin = async (
   if (process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
       process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
       process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0') {
-    result['chat.headers'] = async (input: Record<string, unknown>, output: { headers: Record<string, string> }) => {
+    result['chat.headers'] = async (_input: Record<string, unknown>, output: { headers: Record<string, string> }) => {
       const token = await getGcloudToken()
       if (token) {
         output.headers['Authorization'] = `Bearer ${token}`

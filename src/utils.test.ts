@@ -143,10 +143,6 @@ describe('resolvePluginConfig', () => {
       delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
     })
 
-    afterEach(() => {
-      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-    })
-
     it('allows missing LITELLM_KEY when LITELLM_GCLOUD_TOKEN_AUTH is set', () => {
       process.env.LITELLM_URL = 'https://gcloud.example.com'
       process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
