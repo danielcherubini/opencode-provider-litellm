@@ -137,4 +137,59 @@ describe('resolvePluginConfig', () => {
       expect(resolvePluginConfig({})).toBeNull()
     })
   })
+
+  describe('gcloud token auth', () => {
+    beforeEach(() => {
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    })
+
+    afterEach(() => {
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    })
+
+    it('allows missing LITELLM_KEY when LITELLM_GCLOUD_TOKEN_AUTH is set', () => {
+      process.env.LITELLM_URL = 'https://gcloud.example.com'
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+      delete process.env.LITELLM_KEY
+
+      const config = resolvePluginConfig({})
+      expect(config).toEqual({ url: 'https://gcloud.example.com', apiKey: '' })
+    })
+
+    it('does not allow missing key when gcloud auth is disabled', () => {
+      process.env.LITELLM_URL = 'https://gcloud.example.com'
+      delete process.env.LITELLM_KEY
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+
+      const config = resolvePluginConfig({})
+      expect(config).toBeNull()
+    })
+
+    it('does not allow missing key when gcloud auth is set to 0', () => {
+      process.env.LITELLM_URL = 'https://gcloud.example.com'
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH = '0'
+      delete process.env.LITELLM_KEY
+
+      const config = resolvePluginConfig({})
+      expect(config).toBeNull()
+    })
+
+    it('does not allow missing key when gcloud auth is empty string', () => {
+      process.env.LITELLM_URL = 'https://gcloud.example.com'
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH = ''
+      delete process.env.LITELLM_KEY
+
+      const config = resolvePluginConfig({})
+      expect(config).toBeNull()
+    })
+
+    it('prefers full env vars over gcloud fallback', () => {
+      process.env.LITELLM_URL = 'https://gcloud.example.com'
+      process.env.LITELLM_KEY = 'normal-key'
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+
+      const config = resolvePluginConfig({})
+      expect(config).toEqual({ url: 'https://gcloud.example.com', apiKey: 'normal-key' })
+    })
+  })
 })

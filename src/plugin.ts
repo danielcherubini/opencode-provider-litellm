@@ -2,6 +2,7 @@ import type { Plugin, PluginInput, PluginOptions } from '@opencode-ai/plugin'
 import { resolvePluginConfig, getProviderId } from './utils.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { createMcpToolDefinitions } from './mcp-tools.js'
+import { getGcloudToken } from './gcloud-token.js'
 
 export const LiteLLMPlugin: Plugin = async (
   input: PluginInput,
@@ -24,7 +25,7 @@ export const LiteLLMPlugin: Plugin = async (
     console.warn(`[opencode-provider-litellm] MCP tool discovery failed: ${e}`)
   }
 
-  return {
+  const result: Record<string, unknown> = {
     config: async (config: Record<string, any>) => {
       try {
         const models = await discoverModels(
@@ -81,11 +82,12 @@ export const LiteLLMPlugin: Plugin = async (
               placeholder: 'sk-...',
             },
           ],
-          async authorize(inputs) {
-            if (!inputs?.apiKey || inputs.apiKey.length === 0) {
+          async authorize(inputs: Record<string, unknown> | undefined) {
+            const apiKey = inputs?.apiKey
+            if (!apiKey || typeof apiKey !== 'string' || apiKey.length === 0) {
               return { type: 'failed' as const }
             }
-            return { type: 'success' as const, key: inputs.apiKey }
+            return { type: 'success' as const, key: apiKey }
           },
         },
       ],
@@ -95,4 +97,17 @@ export const LiteLLMPlugin: Plugin = async (
       ...mcpTools,
     },
   }
+
+  if (process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0') {
+    result['chat.headers'] = async (input: Record<string, unknown>, output: { headers: Record<string, string> }) => {
+      const token = await getGcloudToken()
+      if (token) {
+        output.headers['Authorization'] = `Bearer ${token}`
+      }
+    }
+  }
+
+  return result
 }

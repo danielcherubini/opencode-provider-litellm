@@ -2,13 +2,15 @@
 
 ## Quick Stats
 
-- **Total Plans:** 1
-- **In Progress:** 0
+- **Total Plans:** 2
+- **In Progress:** 1
 - **Completed:** 1
 
 ## Active Plans
 
-*(none)*
+| Plan | Status | Date |
+|------|--------|------|
+| [gcloud Token Auth via chat.headers](./2026-06-03-gcloud-token-auth.md) | 🚧 IN PROGRESS | 2026-06-03 |
 
 ## Completed Plans
 
