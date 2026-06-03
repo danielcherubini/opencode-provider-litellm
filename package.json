@@ -1,6 +1,6 @@
 {
   "name": "opencode-provider-litellm",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "OpenCode plugin for any LiteLLM proxy — auto-discovers models, auth, and capabilities",
   "type": "module",
   "exports": {
