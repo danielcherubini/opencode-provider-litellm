@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeEach } from 'vitest'
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { OpencodeModelConfig } from './types.js'
 
@@ -80,6 +80,10 @@ describe('LiteLLMPlugin', () => {
     })
   })
 
+  afterEach(() => {
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+  })
+
   it('throws on missing config', async () => {
     vi.mocked(resolvePluginConfig).mockReturnValue(null)
 
@@ -94,15 +98,11 @@ describe('LiteLLMPlugin', () => {
     vi.mocked(resolvePluginConfig).mockReturnValue(null)
     process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
 
-    try {
-      await expect(
-        LiteLLMPlugin(mockInput, {})
-      ).rejects.toThrow(
-        'LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1',
-      )
-    } finally {
-      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-    }
+    await expect(
+      LiteLLMPlugin(mockInput, {})
+    ).rejects.toThrow(
+      'LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1',
+    )
   })
 
   it('throws generic error when LITELLM_GCLOUD_TOKEN_AUTH is not set and config is missing', async () => {
@@ -303,8 +303,6 @@ describe('LiteLLMPlugin', () => {
     const output = { headers: {} as Record<string, string> }
     await (hooks['chat.headers'] as Function)({}, output)
     expect(output.headers['Authorization']).toBe('Bearer mock-gcloud-token')
-
-    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
   })
 
   it('does not register chat.headers hook when LITELLM_GCLOUD_TOKEN_AUTH is unset', async () => {
