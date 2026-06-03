@@ -17,21 +17,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
-
-const mockEnv = (vars: Record<string, string | undefined>) => {
-  const original = { ...process.env }
-  for (const [k, v] of Object.entries(vars)) {
-    if (v === undefined) {
-      delete process.env[k]
-    } else {
-      process.env[k] = v
-    }
-  }
-  return () => {
-    process.env = { ...original }
-  }
-}
 
 const authorizedUserCredentials = {
   type: 'authorized_user',
@@ -54,14 +41,13 @@ const serviceAccountCredentials = {
 describe('getGcloudToken', () => {
   afterEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllEnvs()
     resetTokenCache()
   })
 
   it('returns token from authorized_user credentials', async () => {
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
 
@@ -80,15 +66,11 @@ describe('getGcloudToken', () => {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       }),
     )
-
-    restore()
   })
 
   it('caches token within TTL', async () => {
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
     mockFetch.mockResolvedValue({
@@ -100,35 +82,28 @@ describe('getGcloudToken', () => {
     const cached = await getGcloudToken()
     expect(cached).toBe('cached-token')
     expect(mockFetch).toHaveBeenCalledTimes(1)
-
-    restore()
   })
 
   it('returns null when ADC file not found (no env, no default)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: undefined,
-      HOME: undefined,
-      USERPROFILE: undefined,
-      APPDATA: undefined,
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', undefined)
+    vi.stubEnv('HOME', undefined)
+    vi.stubEnv('USERPROFILE', undefined)
+    vi.stubEnv('APPDATA', undefined)
 
     const token = await getGcloudToken()
     expect(token).toBeNull()
     expect(warnSpy).toHaveBeenCalled()
 
-    restore()
     warnSpy.mockRestore()
   })
 
   it('returns null when ADC file is invalid JSON', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue('not valid json{{{')
 
@@ -136,17 +111,14 @@ describe('getGcloudToken', () => {
     expect(token).toBeNull()
     expect(warnSpy).toHaveBeenCalled()
 
-    restore()
     warnSpy.mockRestore()
   })
 
   it('returns null and warns for service_account type', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(serviceAccountCredentials))
 
@@ -156,17 +128,14 @@ describe('getGcloudToken', () => {
       '[opencode-provider-litellm] Service account credentials are not yet supported. Use an authorized_user credential or set GOOGLE_APPLICATION_CREDENTIALS to an authorized_user JSON file.',
     )
 
-    restore()
     warnSpy.mockRestore()
   })
 
   it('returns null on token exchange failure', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
     mockFetch.mockResolvedValue({
@@ -179,17 +148,14 @@ describe('getGcloudToken', () => {
     expect(token).toBeNull()
     expect(warnSpy).toHaveBeenCalled()
 
-    restore()
     warnSpy.mockRestore()
   })
 
   it('returns null on token exchange network error', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
     mockFetch.mockRejectedValue(new Error('network error'))
@@ -198,16 +164,13 @@ describe('getGcloudToken', () => {
     expect(token).toBeNull()
     expect(warnSpy).toHaveBeenCalled()
 
-    restore()
     warnSpy.mockRestore()
   })
 
   it('reads default ADC location when GOOGLE_APPLICATION_CREDENTIALS is not set', async () => {
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: undefined,
-      HOME: '/home/test',
-      APPDATA: undefined,
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', undefined)
+    vi.stubEnv('HOME', '/home/test')
+    vi.stubEnv('APPDATA', undefined)
 
     mockExistsSync.mockReturnValue(true)
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
@@ -222,16 +185,12 @@ describe('getGcloudToken', () => {
       expect.stringContaining('application_default_credentials.json'),
       'utf-8',
     )
-
-    restore()
   })
 
   it('reads Windows APPDATA ADC location', async () => {
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: undefined,
-      HOME: undefined,
-      APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', undefined)
+    vi.stubEnv('HOME', undefined)
+    vi.stubEnv('APPDATA', 'C:\\Users\\test\\AppData\\Roaming')
 
     mockExistsSync.mockImplementation((path: string) => {
       return typeof path === 'string' && path.includes('AppData') && path.includes('gcloud')
@@ -249,15 +208,11 @@ describe('getGcloudToken', () => {
       expect.stringContaining('gcloud'),
       'utf-8',
     )
-
-    restore()
   })
 
   it('respects GOOGLE_APPLICATION_CREDENTIALS path over default', async () => {
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/custom/path/creds.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/custom/path/creds.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
     mockFetch.mockResolvedValue({
@@ -268,15 +223,11 @@ describe('getGcloudToken', () => {
     const token = await getGcloudToken()
     expect(token).toBe('custom-path-token')
     expect(mockReadFileSync).toHaveBeenCalledWith('/custom/path/creds.json', 'utf-8')
-
-    restore()
   })
 
   it('stale cache triggers new token fetch', async () => {
-    const restore = mockEnv({
-      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/adc.json',
-      HOME: '/home/test',
-    })
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
 
     mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
     mockFetch
@@ -300,6 +251,5 @@ describe('getGcloudToken', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2)
 
     vi.restoreAllMocks()
-    restore()
   })
 })
