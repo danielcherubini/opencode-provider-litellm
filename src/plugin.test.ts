@@ -54,6 +54,7 @@ describe('LiteLLMPlugin', () => {
 
   beforeEach(() => {
     vi.resetAllMocks()
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
 
     mockInput = createMockInput()
     logFn = mockInput.client.app.log as ReturnType<typeof vi.fn>

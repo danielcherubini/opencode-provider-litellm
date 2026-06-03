@@ -24,9 +24,21 @@ export const LiteLLMPlugin: Plugin = async (
 
   const providerId = getProviderId()
 
+  const isGcloudAuth = !!(process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0')
+
+  // When gcloud token auth is enabled, fetch a live token instead of using the static apiKey
+  const getToken = async (): Promise<string> => {
+    if (isGcloudAuth) {
+      return (await getGcloudToken()) ?? ''
+    }
+    return pluginConfig.apiKey
+  }
+
   let mcpTools: Record<string, any> = {}
   try {
-    mcpTools = await createMcpToolDefinitions(pluginConfig, pluginConfig.apiKey)
+    mcpTools = await createMcpToolDefinitions(pluginConfig, await getToken())
   } catch (e) {
     console.warn(`[opencode-provider-litellm] MCP tool discovery failed: ${e}`)
   }
@@ -36,7 +48,7 @@ export const LiteLLMPlugin: Plugin = async (
       try {
         const models = await discoverModels(
           pluginConfig,
-          () => Promise.resolve(pluginConfig.apiKey),
+          getToken,
         )
 
         if (Object.keys(models).length === 0) {
@@ -48,11 +60,12 @@ export const LiteLLMPlugin: Plugin = async (
             },
           })
         } else {
+          const token = await getToken()
           injectModelsIntoConfig(
             config as Parameters<typeof injectModelsIntoConfig>[0],
             providerId,
             pluginConfig.url,
-            pluginConfig.apiKey,
+            token,
             models,
           )
           await input.client.app.log({
@@ -104,9 +117,7 @@ export const LiteLLMPlugin: Plugin = async (
     },
   }
 
-  if (process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
-      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
-      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0') {
+  if (isGcloudAuth) {
     result['chat.headers'] = async (_input: Record<string, unknown>, output: { headers: Record<string, string> }) => {
       const token = await getGcloudToken()
       if (token) {
