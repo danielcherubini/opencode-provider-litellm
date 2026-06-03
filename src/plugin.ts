@@ -10,9 +10,15 @@ export const LiteLLMPlugin: Plugin = async (
 ) => {
   const pluginConfig = resolvePluginConfig(options)
   if (pluginConfig === null) {
+    const isGcloudAuth = process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0'
+
     throw new Error(
-      "Plugin config error: set 'url' and 'apiKey' in plugin options, " +
-      "or set LITELLM_URL and LITELLM_KEY environment variables.",
+      isGcloudAuth
+        ? "Plugin config error: set LITELLM_URL (LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1)."
+        : "Plugin config error: set 'url' and 'apiKey' in plugin options, " +
+          "or set LITELLM_URL and LITELLM_KEY environment variables.",
     )
   }
 

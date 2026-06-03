@@ -90,6 +90,32 @@ describe('LiteLLMPlugin', () => {
     )
   })
 
+  it('throws gcloud-specific error when LITELLM_GCLOUD_TOKEN_AUTH is set but config is missing', async () => {
+    vi.mocked(resolvePluginConfig).mockReturnValue(null)
+    process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+
+    try {
+      await expect(
+        LiteLLMPlugin(mockInput, {})
+      ).rejects.toThrow(
+        'LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1',
+      )
+    } finally {
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    }
+  })
+
+  it('throws generic error when LITELLM_GCLOUD_TOKEN_AUTH is not set and config is missing', async () => {
+    vi.mocked(resolvePluginConfig).mockReturnValue(null)
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+
+    await expect(
+      LiteLLMPlugin(mockInput, {})
+    ).rejects.toThrow(
+      "Plugin config error: set 'url' and 'apiKey'",
+    )
+  })
+
   it('config hook calls discoverModels and injects models into config', async () => {
     const hooks = await LiteLLMPlugin(mockInput, {
       url: 'https://litellm.example.com',
