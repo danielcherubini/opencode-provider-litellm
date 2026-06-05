@@ -26,6 +26,12 @@ vi.mock('./gcloud-token.js', () => ({
   resetTokenCache: vi.fn(),
 }))
 
+// Mock the model cache module — no cache by default
+vi.mock('./model-cache.js', () => ({
+  loadModelCache: vi.fn().mockReturnValue(null),
+  saveModelCache: vi.fn(),
+}))
+
 import { LiteLLMPlugin } from './plugin.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { resolvePluginConfig } from './utils.js'

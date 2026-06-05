@@ -3,6 +3,7 @@ import { resolvePluginConfig, getProviderId } from './utils.js'
 import { discoverModels, injectModelsIntoConfig } from './discovery.js'
 import { createMcpToolDefinitions } from './mcp-tools.js'
 import { getGcloudToken } from './gcloud-token.js'
+import { loadModelCache, saveModelCache } from './model-cache.js'
 
 export const LiteLLMPlugin: Plugin = async (
   input: PluginInput,
@@ -45,11 +46,23 @@ export const LiteLLMPlugin: Plugin = async (
 
   const result: Record<string, unknown> = {
     config: async (config: Record<string, any>) => {
-      try {
-        const models = await discoverModels(
-          pluginConfig,
-          getToken,
+      // Inject cached models immediately so opencode has something to work
+      // with while live discovery runs.
+      const cachedModels = loadModelCache(providerId)
+      if (cachedModels) {
+        const token = await getToken()
+        injectModelsIntoConfig(
+          config as Parameters<typeof injectModelsIntoConfig>[0],
+          providerId,
+          pluginConfig.url,
+          token,
+          cachedModels,
         )
+      }
+
+      // Discover live models, update cache, and re-inject with fresh data.
+      try {
+        const models = await discoverModels(pluginConfig, getToken)
 
         if (Object.keys(models).length === 0) {
           await input.client.app.log({
@@ -60,6 +73,7 @@ export const LiteLLMPlugin: Plugin = async (
             },
           })
         } else {
+          saveModelCache(providerId, models)
           const token = await getToken()
           injectModelsIntoConfig(
             config as Parameters<typeof injectModelsIntoConfig>[0],
