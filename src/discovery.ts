@@ -23,9 +23,8 @@ interface LiteLLMModelInfo {
 }
 
 /**
- * Fetches available models from the LiteLLM proxy's /health endpoint,
- * then fetches rich metadata from /model/info for each model.
- * Falls back to /v1/model/info if /health returns empty (e.g., complexity routers).
+ * Fetches available models from the LiteLLM proxy's /v1/model/info endpoint.
+ * Falls back to /health + /model/info per model for older LiteLLM versions.
  * Maps the metadata to OpenCode's model config format.
  */
 export async function discoverModels(
@@ -38,7 +37,68 @@ export async function discoverModels(
   const timeoutId = setTimeout(() => controller.abort(), 15_000)
 
   try {
-    // Step 1: Try /health first (traditional approach)
+    // Primary: use /v1/model/info — single call, returns all models with full metadata
+    const modelInfoResponse = await fetch(`${config.url}/v1/model/info`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    })
+
+    if (modelInfoResponse.ok) {
+      const modelInfoBody = await modelInfoResponse.json()
+      const modelData = modelInfoBody.data as Array<{ model_name?: string; model_info?: LiteLLMModelInfo }> | undefined
+
+      if (Array.isArray(modelData) && modelData.length > 0) {
+        const models: Record<string, OpencodeModelConfig> = {}
+
+        for (const entry of modelData) {
+          if (!entry?.model_name) continue
+
+          const info = entry.model_info || {}
+          const modelName = entry.model_name
+
+          const inputModalities: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'> = ['text']
+          if (info.supports_vision) inputModalities.push('image')
+          if (info.supports_audio_input) inputModalities.push('audio')
+          if (info.supports_pdf_input) inputModalities.push('pdf')
+
+          const modelConfig: OpencodeModelConfig = {
+            name: modelName,
+            tool_call: info.supports_function_calling ?? true,
+            reasoning: info.supports_reasoning ?? false,
+            limit: {
+              context: info.max_input_tokens ?? 32768,
+              output: info.max_output_tokens ?? info.max_tokens ?? 32768,
+            },
+            modalities: {
+              input: inputModalities,
+              output: ['text'],
+            },
+          }
+
+          if (info.input_cost_per_token != null && info.output_cost_per_token != null) {
+            modelConfig.cost = {
+              input: info.input_cost_per_token * 1_000_000,
+              output: info.output_cost_per_token * 1_000_000,
+            }
+            if (info.cache_read_input_token_cost != null) {
+              modelConfig.cost.cache_read = info.cache_read_input_token_cost * 1_000_000
+            }
+            if (info.cache_creation_input_token_cost != null) {
+              modelConfig.cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
+            }
+          }
+
+          models[modelName] = modelConfig
+        }
+
+        return models
+      }
+    }
+
+    // Fallback: use /health + /model/info per model (legacy approach)
     const healthResponse = await fetch(`${config.url}/health`, {
       method: 'GET',
       headers: {
@@ -53,108 +113,48 @@ export async function discoverModels(
       )
     }
 
+    if (!healthResponse.ok) return {}
+
     const healthBody = await healthResponse.json()
     const healthyEndpoints = healthBody.healthy_endpoints as LiteLLMHealthModel[] | undefined
+    if (!Array.isArray(healthyEndpoints) || healthyEndpoints.length === 0) return {}
 
-    if (Array.isArray(healthyEndpoints) && healthyEndpoints.length > 0) {
-      // Traditional approach: fetch model info for each healthy endpoint
-      const modelInfos = await Promise.all(
-        healthyEndpoints.map(async (endpoint) => {
-          try {
-            const infoResponse = await fetch(
-              `${config.url}/model/info?litellm_model_id=${encodeURIComponent(endpoint.model_id)}`,
-              {
-                method: 'GET',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                },
-                signal: controller.signal,
+    // Fetch model info for each healthy endpoint
+    const modelInfos = await Promise.all(
+      healthyEndpoints.map(async (endpoint) => {
+        try {
+          const infoResponse = await fetch(
+            `${config.url}/model/info?litellm_model_id=${encodeURIComponent(endpoint.model_id)}`,
+            {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${token}`,
               },
-            )
+              signal: controller.signal,
+            },
+          )
 
-            if (!infoResponse.ok) return null
+          if (!infoResponse.ok) return null
 
-            const infoBody = await infoResponse.json()
-            const data = infoBody.data as Array<{ model_name?: string; model_info?: LiteLLMModelInfo }> | undefined
-            if (!Array.isArray(data) || !data[0]) return null
+          const infoBody = await infoResponse.json()
+          const data = infoBody.data as Array<{ model_name?: string; model_info?: LiteLLMModelInfo }> | undefined
+          if (!Array.isArray(data) || !data[0]) return null
 
-            return { model_name: data[0].model_name, ...data[0].model_info }
-          } catch {
-            return null
-          }
-        }),
-      )
-
-      // Map to OpenCode model config
-      const models: Record<string, OpencodeModelConfig> = {}
-
-      for (let i = 0; i < healthyEndpoints.length; i++) {
-        const info = modelInfos[i]
-        if (!info?.model_name) continue
-
-        const modelName = info.model_name
-        const inputModalities: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'> = ['text']
-        if (info.supports_vision) inputModalities.push('image')
-        if (info.supports_audio_input) inputModalities.push('audio')
-        if (info.supports_pdf_input) inputModalities.push('pdf')
-
-        const modelConfig: OpencodeModelConfig = {
-          name: modelName,
-          tool_call: info.supports_function_calling ?? true,
-          reasoning: info.supports_reasoning ?? false,
-          limit: {
-            context: info.max_input_tokens ?? 32768,
-            output: info.max_output_tokens ?? info.max_tokens ?? 32768,
-          },
-          modalities: {
-            input: inputModalities,
-            output: ['text'],
-          },
+          return { model_name: data[0].model_name, ...data[0].model_info }
+        } catch {
+          return null
         }
-
-        if (info.input_cost_per_token != null && info.output_cost_per_token != null) {
-          modelConfig.cost = {
-            input: info.input_cost_per_token * 1_000_000,
-            output: info.output_cost_per_token * 1_000_000,
-          }
-          if (info.cache_read_input_token_cost != null) {
-            modelConfig.cost.cache_read = info.cache_read_input_token_cost * 1_000_000
-          }
-          if (info.cache_creation_input_token_cost != null) {
-            modelConfig.cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
-          }
-        }
-
-        models[modelName] = modelConfig
-      }
-
-      return models
-    }
-
-    // Fallback: use /v1/model/info to get all models
-    const modelInfoResponse = await fetch(`${config.url}/v1/model/info`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      signal: controller.signal,
-    })
-
-    if (!modelInfoResponse.ok) return {}
-
-    const modelInfoBody = await modelInfoResponse.json()
-    const modelData = modelInfoBody.data as Array<{ model_name?: string; model_info?: LiteLLMModelInfo }> | undefined
-    if (!Array.isArray(modelData)) return {}
+      }),
+    )
 
     // Map to OpenCode model config
     const models: Record<string, OpencodeModelConfig> = {}
 
-    for (const entry of modelData) {
-      if (!entry?.model_name) continue
+    for (let i = 0; i < healthyEndpoints.length; i++) {
+      const info = modelInfos[i]
+      if (!info?.model_name) continue
 
-      const info = entry.model_info || {}
-      const modelName = entry.model_name
-
+      const modelName = info.model_name
       const inputModalities: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'> = ['text']
       if (info.supports_vision) inputModalities.push('image')
       if (info.supports_audio_input) inputModalities.push('audio')
