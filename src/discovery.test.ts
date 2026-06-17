@@ -24,53 +24,37 @@ describe('discoverModels', () => {
 
   it('returns mapped models from LiteLLM response', async () => {
     const mockFetch = vi.fn()
-      // /health endpoint
+      // /v1/model/info (primary — single call returns all models)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: async () => ({
-          healthy_endpoints: [
-            { model: 'gpt-4', model_id: 'uuid-1' },
-            { model: 'qwen3-32b', model_id: 'uuid-2' },
+          data: [
+            {
+              model_name: 'gpt-4',
+              model_info: {
+                max_input_tokens: 8192,
+                max_output_tokens: 8192,
+                supports_function_calling: true,
+                supports_reasoning: false,
+                supports_vision: false,
+                input_cost_per_token: 0.0001,
+                output_cost_per_token: 0.0003,
+              },
+            },
+            {
+              model_name: 'qwen3-32b',
+              model_info: {
+                max_input_tokens: 32768,
+                max_output_tokens: 32768,
+                supports_function_calling: true,
+                supports_reasoning: true,
+                supports_vision: false,
+                input_cost_per_token: 0.00005,
+                output_cost_per_token: 0.00015,
+              },
+            },
           ],
-        }),
-      })
-      // /model/info for gpt-4
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: [{
-            model_name: 'gpt-4',
-            model_info: {
-              max_input_tokens: 8192,
-              max_output_tokens: 8192,
-              supports_function_calling: true,
-              supports_reasoning: false,
-              supports_vision: false,
-              input_cost_per_token: 0.0001,
-              output_cost_per_token: 0.0003,
-            },
-          }],
-        }),
-      })
-      // /model/info for qwen3-32b
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: [{
-            model_name: 'qwen3-32b',
-            model_info: {
-              max_input_tokens: 32768,
-              max_output_tokens: 32768,
-              supports_function_calling: true,
-              supports_reasoning: true,
-              supports_vision: false,
-              input_cost_per_token: 0.00005,
-              output_cost_per_token: 0.00015,
-            },
-          }],
         }),
       })
     vi.stubGlobal('fetch', mockFetch)
@@ -96,7 +80,7 @@ describe('discoverModels', () => {
       },
     })
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://litellm.example.com/health',
+      'https://litellm.example.com/v1/model/info',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer test-token',
@@ -109,15 +93,7 @@ describe('discoverModels', () => {
 
   it('converts per-token cost to per-1M tokens with cache costs', async () => {
     const mockFetch = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          healthy_endpoints: [
-            { model: 'anthropic/claude-sonnet', model_id: 'uuid-1' },
-          ],
-        }),
-      })
+      // /v1/model/info (primary — single call returns all models)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
