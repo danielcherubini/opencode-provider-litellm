@@ -372,7 +372,7 @@ describe('LiteLLMPlugin', () => {
   })
 
   describe('chat.params thinking normalization', () => {
-    it('normalizes thinking string "enabled" to dict', async () => {
+    it('normalizes thinking string "enabled" to adaptive', async () => {
       const hooks = await LiteLLMPlugin(mockInput, {
         url: 'https://litellm.example.com',
         apiKey: 'test-api-key',
@@ -380,10 +380,10 @@ describe('LiteLLMPlugin', () => {
 
       const output = { options: { thinking: 'enabled' } as Record<string, unknown> }
       await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'enabled' })
+      expect(output.options.thinking).toEqual({ type: 'adaptive' })
     })
 
-    it('normalizes thinking string "disabled" to dict', async () => {
+    it('normalizes thinking string "disabled" to disabled', async () => {
       const hooks = await LiteLLMPlugin(mockInput, {
         url: 'https://litellm.example.com',
         apiKey: 'test-api-key',
@@ -394,7 +394,40 @@ describe('LiteLLMPlugin', () => {
       expect(output.options.thinking).toEqual({ type: 'disabled' })
     })
 
-    it('leaves thinking dict untouched', async () => {
+    it('normalizes thinking string "off" to disabled', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: { thinking: 'off' } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toEqual({ type: 'disabled' })
+    })
+
+    it('normalizes thinking string "medium" to adaptive', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: { thinking: 'medium' } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toEqual({ type: 'adaptive' })
+    })
+
+    it('normalizes thinking dict with non-standard type to adaptive', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: { thinking: { type: 'medium', budget_tokens: 1000 } } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toEqual({ type: 'adaptive', budget_tokens: 1000 })
+    })
+
+    it('leaves thinking dict with valid type untouched', async () => {
       const hooks = await LiteLLMPlugin(mockInput, {
         url: 'https://litellm.example.com',
         apiKey: 'test-api-key',

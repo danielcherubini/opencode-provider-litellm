@@ -152,17 +152,29 @@ export const LiteLLMPlugin: Plugin = async (
     }
   }
 
-  // Normalize `thinking` param from string alias ("enabled"/"disabled") to dict
-  // shape {"type": "enabled"} before it hits LiteLLM. LiteLLM's
-  // is_thinking_enabled assumes thinking is always a dict (see
-  // BerriAI/litellm#28576, PR #28861).
+  // Normalize `thinking` param to Vertex AI Claude format.
+  // Vertex AI Claude only accepts type in {"adaptive", "disabled", "enabled"}.
+  // Opencode may send string levels like "medium"/"low"/"high" or dict with
+  // non-standard type values — map them to "adaptive" (Claude decides budget)
+  // or "disabled" (no thinking).
+  // Also ensures thinking is always a dict (LiteLLM's is_thinking_enabled
+  // assumes dict shape — see BerriAI/litellm#28576, PR #28861).
   result['chat.params'] = async (
     _input: Record<string, unknown>,
     output: { options: Record<string, unknown> },
   ) => {
     const thinking = output.options.thinking
     if (typeof thinking === 'string') {
-      output.options.thinking = { type: thinking }
+      const type = (thinking === 'off' || thinking === 'disabled')
+        ? 'disabled'
+        : 'adaptive'
+      output.options.thinking = { type }
+    } else if (typeof thinking === 'object' && thinking !== null && !Array.isArray(thinking)) {
+      const thinkingObj = thinking as Record<string, unknown>
+      const type = thinkingObj.type as string | undefined
+      if (typeof type === 'string' && !['adaptive', 'disabled', 'enabled'].includes(type)) {
+        thinkingObj.type = 'adaptive'
+      }
     }
   }
 
