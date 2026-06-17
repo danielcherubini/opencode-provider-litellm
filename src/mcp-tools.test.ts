@@ -120,7 +120,8 @@ describe('discoverMcpTools', () => {
   })
 
   it('respects timeout (AbortError after 10s)', async () => {
-    vi.useFakeTimers()
+    const controller = new AbortController()
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
 
     const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
       return new Promise<Response>((_resolve, reject) => {
@@ -136,12 +137,12 @@ describe('discoverMcpTools', () => {
 
     const promise = discoverMcpTools(config, token)
 
-    await vi.advanceTimersByTimeAsync(10001)
+    await Promise.resolve()
+    controller.abort()
 
     const result = await promise
 
-    vi.useRealTimers()
-
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000)
     expect(result).toEqual([])
   })
 })
@@ -245,7 +246,8 @@ describe('executeMcpTool', () => {
   })
 
   it('respects timeout (AbortError after 30s)', async () => {
-    vi.useFakeTimers()
+    const controller = new AbortController()
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
 
     const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
       return new Promise<string>((_resolve, reject) => {
@@ -267,12 +269,12 @@ describe('executeMcpTool', () => {
       { query: 'test' },
     )
 
-    await vi.advanceTimersByTimeAsync(30001)
+    await Promise.resolve()
+    controller.abort()
 
     const result = await promise
 
-    vi.useRealTimers()
-
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000)
     expect(result).toContain('Error calling search on brave')
   })
 })

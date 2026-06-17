@@ -6,14 +6,13 @@ import type { PluginConfig, McpTool } from './types.js'
  * GET /mcp-rest/tools/list.
  *
  * Returns an empty array on any error (network, 4xx, 5xx, parse failure).
- * Uses a 10s timeout via AbortController.
+ * Uses a 10s timeout.
  */
 export async function discoverMcpTools(
   config: PluginConfig,
   token: string,
 ): Promise<McpTool[]> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10_000)
+  const signal = AbortSignal.timeout(10_000)
 
   try {
     const response = await fetch(`${config.url}/mcp-rest/tools/list`, {
@@ -22,7 +21,7 @@ export async function discoverMcpTools(
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      signal: controller.signal,
+      signal,
     })
 
     if (!response.ok) {
@@ -38,8 +37,6 @@ export async function discoverMcpTools(
     return body as McpTool[]
   } catch {
     return []
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
@@ -49,7 +46,7 @@ export async function discoverMcpTools(
  *
  * Returns the result as a formatted string. On error, returns an error
  * message string instead of throwing.
- * Uses a 30s timeout via AbortController.
+ * Uses a 30s timeout.
  */
 export async function executeMcpTool(
   config: PluginConfig,
@@ -58,8 +55,7 @@ export async function executeMcpTool(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<string> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30_000)
+  const signal = AbortSignal.timeout(30_000)
 
   try {
     const response = await fetch(`${config.url}/mcp-rest/tools/call`, {
@@ -69,7 +65,7 @@ export async function executeMcpTool(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ server, tool: toolName, args }),
-      signal: controller.signal,
+      signal,
     })
 
     if (!response.ok) {
@@ -86,8 +82,6 @@ export async function executeMcpTool(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
     return `Error calling ${toolName} on ${server}: ${message}`
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 

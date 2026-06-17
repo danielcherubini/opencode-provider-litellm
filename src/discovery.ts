@@ -67,9 +67,7 @@ export async function discoverModels(
   getToken: () => Promise<string>,
 ): Promise<Record<string, OpencodeModelConfig>> {
   const token = await getToken()
-
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 15_000)
+  const signal = AbortSignal.timeout(15_000)
 
   try {
     // Primary: use /v1/model/info — single call, returns all models with full metadata
@@ -78,7 +76,7 @@ export async function discoverModels(
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      signal: controller.signal,
+        signal,
     })
 
     if (modelInfoResponse.ok) {
@@ -105,7 +103,7 @@ export async function discoverModels(
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      signal: controller.signal,
+      signal,
     })
 
     if (healthResponse.status === 403) {
@@ -131,7 +129,7 @@ export async function discoverModels(
               headers: {
                 Authorization: `Bearer ${token}`,
               },
-              signal: controller.signal,
+              signal,
             },
           )
 
@@ -160,8 +158,8 @@ export async function discoverModels(
 
     return models
   } catch (error: unknown) {
-    // Timeout (AbortError) or network error → return empty object
-    if (error instanceof Error && error.name === 'AbortError') {
+    // Timeout/abort or network error → return empty object
+    if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
       return {}
     }
     // Re-throw the 403 descriptive error
@@ -170,8 +168,6 @@ export async function discoverModels(
     }
     // Network errors → return empty object
     return {}
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
