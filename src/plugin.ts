@@ -131,12 +131,38 @@ export const LiteLLMPlugin: Plugin = async (
     },
   }
 
-  if (isGcloudAuth) {
-    result['chat.headers'] = async (_input: Record<string, unknown>, output: { headers: Record<string, string> }) => {
+  // Inject session ID into LiteLLM requests so all messages in the same
+  // opencode session are grouped under one conversation in LiteLLM logs.
+  // Mirrors pi-provider-litellm's setSessionId(ctx.sessionManager.getSessionId()).
+  result['chat.headers'] = async (
+    input: { sessionID: string },
+    output: { headers: Record<string, string> },
+  ) => {
+    // gcloud auth: inject fresh OAuth token
+    if (isGcloudAuth) {
       const token = await getGcloudToken()
       if (token) {
         output.headers['Authorization'] = `Bearer ${token}`
       }
+    }
+
+    // Session ID: group requests by conversation in LiteLLM logs
+    if (input.sessionID) {
+      output.headers['X-Litellm-Session-ID'] = input.sessionID
+    }
+  }
+
+  // Normalize `thinking` param from string alias ("enabled"/"disabled") to dict
+  // shape {"type": "enabled"} before it hits LiteLLM. LiteLLM's
+  // is_thinking_enabled assumes thinking is always a dict (see
+  // BerriAI/litellm#28576, PR #28861).
+  result['chat.params'] = async (
+    _input: Record<string, unknown>,
+    output: { options: Record<string, unknown> },
+  ) => {
+    const thinking = output.options.thinking
+    if (typeof thinking === 'string') {
+      output.options.thinking = { type: thinking }
     }
   }
 

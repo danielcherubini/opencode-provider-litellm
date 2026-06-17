@@ -292,34 +292,139 @@ describe('LiteLLMPlugin', () => {
     delete process.env.LITELLM_KEY
   })
 
-  it('registers chat.headers hook when LITELLM_GCLOUD_TOKEN_AUTH is set', async () => {
-    process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+  describe('chat.headers', () => {
+    it('always registers chat.headers hook', async () => {
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
 
-    const { getGcloudToken } = await import('./gcloud-token.js')
-    vi.mocked(getGcloudToken).mockResolvedValue('mock-gcloud-token')
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
 
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
+      expect(hooks['chat.headers']).toBeDefined()
+      expect(typeof hooks['chat.headers']).toBe('function')
     })
 
-    expect(hooks['chat.headers']).toBeDefined()
-    expect(typeof hooks['chat.headers']).toBe('function')
+    it('injects session ID header', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
 
-    // Verify the hook injects the token
-    const output = { headers: {} as Record<string, string> }
-    await (hooks['chat.headers'] as Function)({}, output)
-    expect(output.headers['Authorization']).toBe('Bearer mock-gcloud-token')
+      const output = { headers: {} as Record<string, string> }
+      await (hooks['chat.headers'] as Function)(
+        { sessionID: 'test-session-123' },
+        output,
+      )
+      expect(output.headers['X-Litellm-Session-ID']).toBe('test-session-123')
+    })
+
+    it('skips session ID header when sessionID is empty', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { headers: {} as Record<string, string> }
+      await (hooks['chat.headers'] as Function)(
+        { sessionID: '' },
+        output,
+      )
+      expect(output.headers['X-Litellm-Session-ID']).toBeUndefined()
+    })
+
+    it('injects gcloud token when LITELLM_GCLOUD_TOKEN_AUTH is set', async () => {
+      process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+
+      const { getGcloudToken } = await import('./gcloud-token.js')
+      vi.mocked(getGcloudToken).mockResolvedValue('mock-gcloud-token')
+
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { headers: {} as Record<string, string> }
+      await (hooks['chat.headers'] as Function)(
+        { sessionID: 'test-session-123' },
+        output,
+      )
+      expect(output.headers['Authorization']).toBe('Bearer mock-gcloud-token')
+      expect(output.headers['X-Litellm-Session-ID']).toBe('test-session-123')
+    })
+
+    it('does not inject gcloud token when LITELLM_GCLOUD_TOKEN_AUTH is unset', async () => {
+      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { headers: {} as Record<string, string> }
+      await (hooks['chat.headers'] as Function)(
+        { sessionID: 'test-session-123' },
+        output,
+      )
+      expect(output.headers['Authorization']).toBeUndefined()
+      expect(output.headers['X-Litellm-Session-ID']).toBe('test-session-123')
+    })
   })
 
-  it('does not register chat.headers hook when LITELLM_GCLOUD_TOKEN_AUTH is unset', async () => {
-    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+  describe('chat.params thinking normalization', () => {
+    it('normalizes thinking string "enabled" to dict', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
 
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
+      const output = { options: { thinking: 'enabled' } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toEqual({ type: 'enabled' })
     })
 
-    expect(hooks['chat.headers']).toBeUndefined()
+    it('normalizes thinking string "disabled" to dict', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: { thinking: 'disabled' } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toEqual({ type: 'disabled' })
+    })
+
+    it('leaves thinking dict untouched', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: { thinking: { type: 'enabled', budget_tokens: 1000 } } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toEqual({ type: 'enabled', budget_tokens: 1000 })
+    })
+
+    it('leaves missing thinking untouched', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: {} as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toBeUndefined()
+    })
+
+    it('leaves thinking null untouched', async () => {
+      const hooks = await LiteLLMPlugin(mockInput, {
+        url: 'https://litellm.example.com',
+        apiKey: 'test-api-key',
+      })
+
+      const output = { options: { thinking: null } as Record<string, unknown> }
+      await (hooks['chat.params'] as Function)({}, output)
+      expect(output.options.thinking).toBeNull()
+    })
   })
 })
