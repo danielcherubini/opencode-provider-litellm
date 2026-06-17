@@ -12,7 +12,6 @@ vi.mock('./discovery.js', () => ({
 vi.mock('./utils.js', () => ({
   resolvePluginConfig: vi.fn(),
   getProviderId: vi.fn(() => 'litellm'),
-  mapLiteLLMModel: vi.fn(),
 }))
 
 // Mock the MCP tools module

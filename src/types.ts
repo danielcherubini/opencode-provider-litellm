@@ -3,11 +3,6 @@ export interface PluginConfig {
   apiKey: string
 }
 
-export interface LiteLLMModel {
-  id: string
-  max_model_len?: number
-}
-
 export interface McpTool {
   name: string
   server_name: string
