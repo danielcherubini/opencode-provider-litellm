@@ -29,6 +29,7 @@
     "url": "git+https://github.com/danielcherubini/opencode-provider-litellm.git"
   },
   "engines": {
+    "node": ">=20.0.0",
     "opencode": ">=1.14.0"
   },
   "dependencies": {
