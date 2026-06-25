@@ -252,4 +252,33 @@ describe('getGcloudToken', () => {
 
     vi.restoreAllMocks()
   })
+
+  it('coalesces concurrent calls into a single token exchange', async () => {
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', '/tmp/adc.json')
+    vi.stubEnv('HOME', '/home/test')
+
+    mockReadFileSync.mockReturnValue(JSON.stringify(authorizedUserCredentials))
+
+    let resolveExchange!: (v: string) => void
+    const exchangePromise = new Promise<string>((resolve) => { resolveExchange = resolve })
+
+    mockFetch.mockReturnValue({
+      ok: true,
+      json: () => exchangePromise.then(token => ({ access_token: token })),
+    })
+
+    // Fire three concurrent calls — none cached yet
+    const [a, b, c] = await Promise.all([
+      getGcloudToken(),
+      getGcloudToken(),
+      getGcloudToken(),
+      Promise.resolve(resolveExchange('coalesced-token')),
+    ]).then(results => results.slice(0, 3))
+
+    expect(a).toBe('coalesced-token')
+    expect(b).toBe('coalesced-token')
+    expect(c).toBe('coalesced-token')
+    // Only one network call despite three concurrent invocations
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
 })
