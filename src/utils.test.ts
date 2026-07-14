@@ -1,51 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mapLiteLLMModel, resolvePluginConfig } from './utils.js'
-import type { LiteLLMModel } from './types.js'
-
-describe('mapLiteLLMModel', () => {
-  it('maps basic model correctly', () => {
-    const model: LiteLLMModel = { id: 'gpt-4o' }
-    const result = mapLiteLLMModel(model)
-
-    expect(result.name).toBe('gpt-4o')
-    expect(result.tool_call).toBe(true)
-    expect(result.reasoning).toBe(false)
-    expect(result.limit).toEqual({ context: 32768, output: 32768 })
-    expect(result.modalities).toEqual({ input: ['text'], output: ['text'] })
-  })
-
-  it('matches reasoning heuristic for qwen3 models', () => {
-    const model: LiteLLMModel = { id: 'qwen/qwen3.6-27b' }
-    expect(mapLiteLLMModel(model).reasoning).toBe(true)
-  })
-
-  it('matches reasoning heuristic for deepseek-r1', () => {
-    const model: LiteLLMModel = { id: 'deepseek-r1' }
-    expect(mapLiteLLMModel(model).reasoning).toBe(true)
-  })
-
-  it('matches reasoning heuristic for o3-mini', () => {
-    const model: LiteLLMModel = { id: 'o3-mini' }
-    expect(mapLiteLLMModel(model).reasoning).toBe(true)
-  })
-
-  it('does NOT match reasoning for gpt-4o', () => {
-    const model: LiteLLMModel = { id: 'gpt-4o' }
-    expect(mapLiteLLMModel(model).reasoning).toBe(false)
-  })
-
-  it('does NOT match reasoning for claude-sonnet-4', () => {
-    const model: LiteLLMModel = { id: 'claude-sonnet-4' }
-    expect(mapLiteLLMModel(model).reasoning).toBe(false)
-  })
-
-  it('uses custom max_model_len for limits', () => {
-    const model: LiteLLMModel = { id: 'gpt-4', max_model_len: 128000 }
-    const result = mapLiteLLMModel(model)
-
-    expect(result.limit).toEqual({ context: 128000, output: 128000 })
-  })
-})
+import { resolvePluginConfig } from './utils.js'
 
 describe('resolvePluginConfig', () => {
   const originalEnv = { ...process.env }

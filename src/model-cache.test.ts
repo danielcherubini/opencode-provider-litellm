@@ -5,7 +5,6 @@ const mockReadFileSync = vi.hoisted(() => vi.fn())
 const mockWriteFileSync = vi.hoisted(() => vi.fn())
 
 vi.mock('fs', () => ({
-  existsSync: vi.fn(() => true),
   readFileSync: mockReadFileSync,
   writeFileSync: mockWriteFileSync,
 }))
@@ -49,28 +48,28 @@ describe('loadModelCache', () => {
 
   it('returns null when providerId does not match', () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'other', models: sampleModels,
+      providerId: 'other', models: sampleModels,
     }))
     expect(loadModelCache('protector')).toBeNull()
   })
 
   it('returns null when models field is missing', () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'protector', models: null,
+      providerId: 'protector', models: null,
     }))
     expect(loadModelCache('protector')).toBeNull()
   })
 
   it('returns models when cache is valid', () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'protector', models: sampleModels,
+      providerId: 'protector', models: sampleModels,
     }))
     expect(loadModelCache('protector')).toEqual(sampleModels)
   })
 
   it('reads from the correct path', () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'protector', models: sampleModels,
+      providerId: 'protector', models: sampleModels,
     }))
     loadModelCache('protector')
     expect(mockReadFileSync).toHaveBeenCalledWith(
@@ -91,7 +90,6 @@ describe('saveModelCache', () => {
     const parsed = JSON.parse(content)
     expect(parsed.providerId).toBe('protector')
     expect(parsed.models).toEqual(sampleModels)
-    expect(typeof parsed.savedAt).toBe('number')
   })
 
   it('writes to the correct path under ~/.local/share/opencode/', () => {

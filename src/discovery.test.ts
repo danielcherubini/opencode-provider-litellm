@@ -129,7 +129,8 @@ describe('discoverModels', () => {
   })
 
   it('returns empty object on timeout', async () => {
-    vi.useFakeTimers()
+    const controller = new AbortController()
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
 
     // Simulate a fetch that rejects when the abort signal fires
     const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
@@ -147,13 +148,12 @@ describe('discoverModels', () => {
     // Run discoverModels
     const promise = discoverModels(config, getToken)
 
-    // Advance timer past 15s timeout
-    await vi.advanceTimersByTimeAsync(15001)
+    await Promise.resolve()
+    controller.abort()
 
     const result = await promise
 
-    vi.useRealTimers()
-
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000)
     expect(result).toEqual({})
   })
 

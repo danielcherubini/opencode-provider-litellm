@@ -29,6 +29,7 @@
     "url": "git+https://github.com/danielcherubini/opencode-provider-litellm.git"
   },
   "engines": {
+    "node": ">=20.0.0",
     "opencode": ">=1.14.0"
   },
   "dependencies": {
@@ -38,7 +39,6 @@
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
     "vitest": "^3.0.0",
-    "@vitest/coverage-v8": "^3.0.0",
     "esbuild": "^0.27.0"
   }
 }

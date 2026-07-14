@@ -1,26 +1,4 @@
-import type { LiteLLMModel, OpencodeModelConfig, PluginConfig } from './types.js'
-
-/**
- * Maps a LiteLLM model to OpenCode model config format.
- */
-export function mapLiteLLMModel(model: LiteLLMModel): OpencodeModelConfig {
-  const maxLen = model.max_model_len ?? 32768
-  const reasoning = /qwen3|deepseek-r1|o[134]/i.test(model.id)
-
-  return {
-    name: model.id,
-    tool_call: true,
-    reasoning,
-    limit: {
-      context: maxLen,
-      output: maxLen,
-    },
-    modalities: {
-      input: ['text'],
-      output: ['text'],
-    },
-  }
-}
+import type { PluginConfig } from './types.js'
 
 /**
  * Resolves plugin configuration from environment variables or config options.

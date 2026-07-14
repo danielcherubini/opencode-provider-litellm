@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import type { OpencodeModelConfig } from './types.js'
@@ -6,7 +6,6 @@ import type { OpencodeModelConfig } from './types.js'
 const CACHE_FILENAME = 'opencode-provider-litellm-cache.json'
 
 interface ModelCache {
-  savedAt: number
   providerId: string
   models: Record<string, OpencodeModelConfig>
 }
@@ -38,7 +37,6 @@ export function loadModelCache(providerId: string): Record<string, OpencodeModel
 export function saveModelCache(providerId: string, models: Record<string, OpencodeModelConfig>): void {
   try {
     const cache: ModelCache = {
-      savedAt: Date.now(),
       providerId,
       models,
     }

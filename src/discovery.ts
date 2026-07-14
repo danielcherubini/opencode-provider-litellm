@@ -7,7 +7,6 @@ interface LiteLLMHealthModel {
 }
 
 interface LiteLLMModelInfo {
-  model_name?: string
   max_tokens?: number
   max_input_tokens?: number
   max_output_tokens?: number
@@ -22,6 +21,42 @@ interface LiteLLMModelInfo {
   cache_creation_input_token_cost?: number
 }
 
+function toModelConfig(modelName: string, info: LiteLLMModelInfo = {}): OpencodeModelConfig {
+  const inputModalities: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'> = ['text']
+  if (info.supports_vision) inputModalities.push('image')
+  if (info.supports_audio_input) inputModalities.push('audio')
+  if (info.supports_pdf_input) inputModalities.push('pdf')
+
+  const modelConfig: OpencodeModelConfig = {
+    name: modelName,
+    tool_call: info.supports_function_calling ?? true,
+    reasoning: info.supports_reasoning ?? false,
+    limit: {
+      context: info.max_input_tokens ?? 32768,
+      output: info.max_output_tokens ?? info.max_tokens ?? 32768,
+    },
+    modalities: {
+      input: inputModalities,
+      output: ['text'],
+    },
+  }
+
+  if (info.input_cost_per_token != null && info.output_cost_per_token != null) {
+    modelConfig.cost = {
+      input: info.input_cost_per_token * 1_000_000,
+      output: info.output_cost_per_token * 1_000_000,
+    }
+    if (info.cache_read_input_token_cost != null) {
+      modelConfig.cost.cache_read = info.cache_read_input_token_cost * 1_000_000
+    }
+    if (info.cache_creation_input_token_cost != null) {
+      modelConfig.cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
+    }
+  }
+
+  return modelConfig
+}
+
 /**
  * Fetches available models from the LiteLLM proxy's /v1/model/info endpoint.
  * Falls back to /health + /model/info per model for older LiteLLM versions.
@@ -32,9 +67,7 @@ export async function discoverModels(
   getToken: () => Promise<string>,
 ): Promise<Record<string, OpencodeModelConfig>> {
   const token = await getToken()
-
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 15_000)
+  const signal = AbortSignal.timeout(15_000)
 
   try {
     // Primary: use /v1/model/info — single call, returns all models with full metadata
@@ -43,7 +76,7 @@ export async function discoverModels(
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      signal: controller.signal,
+        signal,
     })
 
     if (modelInfoResponse.ok) {
@@ -56,42 +89,8 @@ export async function discoverModels(
         for (const entry of modelData) {
           if (!entry?.model_name) continue
 
-          const info = entry.model_info || {}
           const modelName = entry.model_name
-
-          const inputModalities: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'> = ['text']
-          if (info.supports_vision) inputModalities.push('image')
-          if (info.supports_audio_input) inputModalities.push('audio')
-          if (info.supports_pdf_input) inputModalities.push('pdf')
-
-          const modelConfig: OpencodeModelConfig = {
-            name: modelName,
-            tool_call: info.supports_function_calling ?? true,
-            reasoning: info.supports_reasoning ?? false,
-            limit: {
-              context: info.max_input_tokens ?? 32768,
-              output: info.max_output_tokens ?? info.max_tokens ?? 32768,
-            },
-            modalities: {
-              input: inputModalities,
-              output: ['text'],
-            },
-          }
-
-          if (info.input_cost_per_token != null && info.output_cost_per_token != null) {
-            modelConfig.cost = {
-              input: info.input_cost_per_token * 1_000_000,
-              output: info.output_cost_per_token * 1_000_000,
-            }
-            if (info.cache_read_input_token_cost != null) {
-              modelConfig.cost.cache_read = info.cache_read_input_token_cost * 1_000_000
-            }
-            if (info.cache_creation_input_token_cost != null) {
-              modelConfig.cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
-            }
-          }
-
-          models[modelName] = modelConfig
+          models[modelName] = toModelConfig(modelName, entry.model_info)
         }
 
         return models
@@ -104,7 +103,7 @@ export async function discoverModels(
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      signal: controller.signal,
+      signal,
     })
 
     if (healthResponse.status === 403) {
@@ -130,7 +129,7 @@ export async function discoverModels(
               headers: {
                 Authorization: `Bearer ${token}`,
               },
-              signal: controller.signal,
+              signal,
             },
           )
 
@@ -140,7 +139,9 @@ export async function discoverModels(
           const data = infoBody.data as Array<{ model_name?: string; model_info?: LiteLLMModelInfo }> | undefined
           if (!Array.isArray(data) || !data[0]) return null
 
-          return { model_name: data[0].model_name, ...data[0].model_info }
+          const entry = data[0]
+          if (!entry.model_name) return null
+          return { modelName: entry.model_name, info: entry.model_info }
         } catch {
           return null
         }
@@ -150,50 +151,15 @@ export async function discoverModels(
     // Map to OpenCode model config
     const models: Record<string, OpencodeModelConfig> = {}
 
-    for (let i = 0; i < healthyEndpoints.length; i++) {
-      const info = modelInfos[i]
-      if (!info?.model_name) continue
-
-      const modelName = info.model_name
-      const inputModalities: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'> = ['text']
-      if (info.supports_vision) inputModalities.push('image')
-      if (info.supports_audio_input) inputModalities.push('audio')
-      if (info.supports_pdf_input) inputModalities.push('pdf')
-
-      const modelConfig: OpencodeModelConfig = {
-        name: modelName,
-        tool_call: info.supports_function_calling ?? true,
-        reasoning: info.supports_reasoning ?? false,
-        limit: {
-          context: info.max_input_tokens ?? 32768,
-          output: info.max_output_tokens ?? info.max_tokens ?? 32768,
-        },
-        modalities: {
-          input: inputModalities,
-          output: ['text'],
-        },
-      }
-
-      if (info.input_cost_per_token != null && info.output_cost_per_token != null) {
-        modelConfig.cost = {
-          input: info.input_cost_per_token * 1_000_000,
-          output: info.output_cost_per_token * 1_000_000,
-        }
-        if (info.cache_read_input_token_cost != null) {
-          modelConfig.cost.cache_read = info.cache_read_input_token_cost * 1_000_000
-        }
-        if (info.cache_creation_input_token_cost != null) {
-          modelConfig.cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
-        }
-      }
-
-      models[modelName] = modelConfig
+    for (const modelInfo of modelInfos) {
+      if (!modelInfo) continue
+      models[modelInfo.modelName] = toModelConfig(modelInfo.modelName, modelInfo.info)
     }
 
     return models
   } catch (error: unknown) {
-    // Timeout (AbortError) or network error → return empty object
-    if (error instanceof Error && error.name === 'AbortError') {
+    // Timeout/abort or network error → return empty object
+    if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
       return {}
     }
     // Re-throw the 403 descriptive error
@@ -202,8 +168,6 @@ export async function discoverModels(
     }
     // Network errors → return empty object
     return {}
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
