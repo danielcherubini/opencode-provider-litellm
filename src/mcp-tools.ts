@@ -1,5 +1,20 @@
-import { tool } from '@opencode-ai/plugin'
 import type { PluginConfig, McpTool } from './types.js'
+
+/**
+ * A tool definition ready for ctx.tool.transform (V2 Tool.Info shape:
+ * name, description, JSON Schema input, and an execute returning
+ * structured content).
+ */
+export interface McpToolDefinition {
+  name: string
+  description: string
+  /** JSON Schema for the tool input. */
+  input: any
+  execute: (
+    input: Record<string, unknown>,
+    context: { signal: AbortSignal },
+  ) => Promise<{ content: string }>
+}
 
 /**
  * Discovers MCP tools available on the LiteLLM proxy by calling
@@ -49,7 +64,8 @@ export async function discoverMcpTools(
  *
  * Returns the result as a formatted string. On error, returns an error
  * message string instead of throwing.
- * Uses a 30s timeout via AbortController.
+ * Uses a 30s timeout via AbortController; an external signal (e.g. the
+ * session's abort signal) also cancels the request.
  */
 export async function executeMcpTool(
   config: PluginConfig,
@@ -57,9 +73,20 @@ export async function executeMcpTool(
   server: string,
   toolName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 30_000)
+
+  let onAbort: (() => void) | undefined
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort()
+    } else {
+      onAbort = () => controller.abort()
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+  }
 
   try {
     const response = await fetch(`${config.url}/mcp-rest/tools/call`, {
@@ -88,6 +115,9 @@ export async function executeMcpTool(
     return `Error calling ${toolName} on ${server}: ${message}`
   } finally {
     clearTimeout(timeoutId)
+    if (signal && onAbort) {
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 }
 
@@ -99,100 +129,36 @@ function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
 }
 
-/**
- * Check if a JSON Schema property can be mapped to a zod type.
- * Returns true for: string, number, integer, boolean, array of strings.
- * Returns false for: nested objects, $ref, anyOf, etc.
- */
-function isMappableSchema(propSchema: unknown): boolean {
-  if (!propSchema || typeof propSchema !== 'object') return false
-
-  const schema = propSchema as Record<string, unknown>
-
-  // Reject if it has $ref or anyOf
-  if ('$ref' in schema || 'anyOf' in schema || 'oneOf' in schema || 'allOf' in schema) {
-    return false
-  }
-
-  const type = schema.type as string | undefined
-  if (!type) return false
-
-  if (type === 'string' || type === 'number' || type === 'integer' || type === 'boolean') {
-    return true
-  }
-
-  if (type === 'array') {
-    const items = schema.items as Record<string, unknown> | undefined
-    if (items && items.type === 'string') {
-      return true
-    }
-    return false
-  }
-
-  return false
+function isObjectSchema(inputSchema: Record<string, unknown>): boolean {
+  return !!inputSchema && typeof inputSchema === 'object' && inputSchema.type === 'object'
 }
 
 /**
- * Build zod args from a JSON Schema input_schema.
- * Returns null if the schema cannot be mapped (use single-arg fallback).
+ * Converts a LiteLLM input_schema to a V2 tool input schema.
+ *
+ * V2 tools accept JSON Schema directly, so object schemas pass through
+ * as-is (properties/required). Schemas that are not plain objects fall
+ * back to a single `args` record field, mirroring the V1 single-arg mode.
  */
-function buildZodArgs(inputSchema: Record<string, unknown>): Record<string, unknown> | null {
-  const properties = inputSchema.properties as Record<string, unknown> | undefined
-  const required = (inputSchema.required as string[] | undefined) ?? []
-
-  if (!properties || typeof properties !== 'object') {
-    return null
-  }
-
-  // Check if all properties are mappable
-  for (const key of Object.keys(properties)) {
-    if (!isMappableSchema(properties[key])) {
-      return null
+function toInputSchema(inputSchema: Record<string, unknown>): any {
+  if (isObjectSchema(inputSchema)) {
+    return {
+      type: 'object',
+      properties: inputSchema.properties && typeof inputSchema.properties === 'object'
+        ? inputSchema.properties
+        : {},
+      required: Array.isArray(inputSchema.required) ? inputSchema.required : [],
     }
   }
 
-  const zodArgs: Record<string, unknown> = {}
-
-  for (const [key, propSchema] of Object.entries(properties)) {
-    const schema = propSchema as Record<string, unknown>
-    const type = schema.type as string | undefined
-    const isRequired = required.includes(key)
-
-    let zodField: unknown
-
-    switch (type) {
-      case 'string':
-        zodField = tool.schema.string().describe(key)
-        break
-      case 'number':
-      case 'integer':
-        zodField = tool.schema.number().describe(key)
-        break
-      case 'boolean':
-        zodField = tool.schema.boolean().describe(key)
-        break
-      case 'array': {
-        const items = schema.items as Record<string, unknown> | undefined
-        if (items && items.type === 'string') {
-          zodField = tool.schema.array(tool.schema.string()).describe(key)
-        } else {
-          return null
-        }
-        break
-      }
-      default:
-        return null
-    }
-
-    if (!isRequired) {
-      // @ts-expect-error — optional() is available on all zod types
-      zodField = zodField.optional()
-    }
-
-    zodArgs[key] = zodField
+  // Fallback: single-arg mode
+  return {
+    type: 'object',
+    properties: {
+      args: { type: 'object', description: 'Tool arguments as key-value pairs' },
+    },
+    required: ['args'],
   }
-
-  return zodArgs
 }
 
 /**
@@ -201,19 +167,15 @@ function buildZodArgs(inputSchema: Record<string, unknown>): Record<string, unkn
  * Each MCP tool is registered as `mcp_${serverName}_${toolName}` with
  * a description appended with the server name.
  *
- * Returns an empty object if no tools are discovered.
+ * Returns an empty array if no tools are discovered.
  */
 export async function createMcpToolDefinitions(
   config: PluginConfig,
   token: string,
-): Promise<Record<string, any>> {
+): Promise<McpToolDefinition[]> {
   const mcpTools = await discoverMcpTools(config, token)
 
-  if (mcpTools.length === 0) {
-    return {}
-  }
-
-  const definitions: Record<string, any> = {}
+  const definitions: McpToolDefinition[] = []
 
   for (const mcpTool of mcpTools) {
     const serverName = mcpTool.server_name
@@ -221,30 +183,23 @@ export async function createMcpToolDefinitions(
 
     const safeServer = sanitizeName(serverName)
     const safeTool = sanitizeName(toolName)
-    const opencodeName = `mcp_${safeServer}_${safeTool}`
 
-    const description = `${mcpTool.description} (via ${serverName} MCP server)`
+    const inputSchema = mcpTool.input_schema ?? {}
+    const isFallback = !isObjectSchema(inputSchema)
 
-    // Build args from input_schema
-    const zodArgs = buildZodArgs(mcpTool.input_schema)
-
-    let args: Record<string, any>
-    if (zodArgs) {
-      args = zodArgs
-    } else {
-      // Fallback: single-arg mode
-      args = {
-        args: tool.schema
-          .record(tool.schema.string(), tool.schema.unknown())
-          .describe('Tool arguments as key-value pairs'),
-      }
-    }
-
-    definitions[opencodeName] = tool({
-      description,
-      args: args as Parameters<typeof tool>[0]['args'],
-      async execute(args: Record<string, unknown>, _context: unknown): Promise<string> {
-        return executeMcpTool(config, token, serverName, toolName, args)
+    definitions.push({
+      name: `mcp_${safeServer}_${safeTool}`,
+      description: `${mcpTool.description} (via ${serverName} MCP server)`,
+      input: toInputSchema(inputSchema),
+      async execute(input: Record<string, unknown>, context: { signal: AbortSignal }) {
+        // Single-arg mode: the model sends the arguments under `args`
+        const raw = input
+        const args = isFallback &&
+          raw && typeof raw === 'object' &&
+          raw.args && typeof raw.args === 'object'
+          ? (raw.args as Record<string, unknown>)
+          : raw
+        return { content: await executeMcpTool(config, token, serverName, toolName, args, context.signal) }
       },
     })
   }

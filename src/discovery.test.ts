@@ -1,15 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { PluginConfig, OpencodeModelConfig } from './types.js'
-import { discoverModels, injectModelsIntoConfig } from './discovery.js'
-
-interface TestConfig {
-  provider?: Record<string, {
-    npm?: string
-    name?: string
-    options?: Record<string, unknown>
-    models?: Record<string, OpencodeModelConfig>
-  }>
-}
+import { Model, Provider } from '@opencode/plugin'
+import type { PluginConfig, DiscoveredModel } from './types.js'
+import { discoverModels, toProviderInfo, toModelInfos } from './discovery.js'
 
 describe('discoverModels', () => {
   const config: PluginConfig = {
@@ -189,124 +181,93 @@ describe('discoverModels', () => {
   })
 })
 
-describe('injectModelsIntoConfig', () => {
-  it('creates provider entry with correct structure', async () => {
-    const config: TestConfig = {}
-    const models: Record<string, OpencodeModelConfig> = {
+describe('toProviderInfo', () => {
+  it('builds a V2 provider entry on the openai-compatible package', () => {
+    const info = toProviderInfo('litellm', 'https://litellm.example.com', 'sk-test-key')
+
+    expect(info.id).toBe(Provider.ID.make('litellm'))
+    expect(info.name).toBe('litellm')
+    expect(info.activation).toBe('enabled')
+    expect(info.package).toBe('@opencode/ai/providers/openai-compatible')
+    expect(info.settings).toEqual({
+      baseURL: 'https://litellm.example.com/v1',
+      apiKey: 'sk-test-key',
+    })
+  })
+
+  it('appends /v1 for a proxy root (the driver appends /chat/completions)', () => {
+    const info = toProviderInfo('litellm', 'http://10.5.30.197:4000/', 'k')
+    expect(info.settings?.baseURL).toBe('http://10.5.30.197:4000/v1')
+  })
+
+  it('does not double-append /v1 when the URL already ends with it', () => {
+    const info = toProviderInfo('litellm', 'https://litellm.example.com/v1', 'k')
+    expect(info.settings?.baseURL).toBe('https://litellm.example.com/v1')
+  })
+})
+
+describe('toModelInfos', () => {
+  it('maps discovered models to Model.Info entries', () => {
+    const models: Record<string, DiscoveredModel> = {
       'gpt-4': {
         name: 'gpt-4',
         tool_call: true,
         reasoning: false,
         limit: { context: 8192, output: 8192 },
-        modalities: { input: ['text' as const], output: ['text' as const] },
+        modalities: { input: ['text'], output: ['text'] },
       },
     }
 
-    injectModelsIntoConfig(config, 'litellm', 'https://litellm.example.com', 'sk-test-key', models)
+    const infos = toModelInfos('litellm', models)
 
-    expect(config.provider).toEqual({
-      litellm: {
-        npm: '@ai-sdk/openai-compatible',
-        name: 'litellm',
-        options: { baseURL: 'https://litellm.example.com', apiKey: 'sk-test-key' },
-        models,
-      },
-    })
+    expect(infos).toHaveLength(1)
+    const [m] = infos
+    expect(m.id).toBe(Model.ID.make('gpt-4'))
+    expect(m.modelID).toBe(Model.ID.make('gpt-4'))
+    expect(m.providerID).toBe(Provider.ID.make('litellm'))
+    expect(m.name).toBe('gpt-4')
+    expect(m.capabilities).toEqual({ tools: true, input: ['text'], output: ['text'] })
+    expect(m.limit).toEqual({ context: 8192, output: 8192 })
+    expect(m.enabled).toBe(true)
+    expect(m.status).toBe('active')
+    expect(m.cost).toEqual([])
   })
 
-  it('merges with existing provider config without overwriting options', async () => {
-    const config: TestConfig = {
-      provider: {
-        litellm: {
-          npm: '@ai-sdk/openai-compatible',
-          name: 'litellm',
-          options: { baseURL: 'https://old.example.com', apiKey: 'old-key', extra: 'value' },
-          models: {
-            'existing-model': {
-              name: 'existing-model',
-              tool_call: true,
-              reasoning: false,
-              limit: { context: 4096, output: 4096 },
-              modalities: { input: ['text' as const], output: ['text' as const] },
-            },
-          },
-        },
+  it('maps per-1M costs to a single tier with cache read/write', () => {
+    const models: Record<string, DiscoveredModel> = {
+      'anthropic/claude-sonnet': {
+        name: 'anthropic/claude-sonnet',
+        limit: { context: 1_000_000, output: 64_000 },
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 3.75 },
       },
     }
 
-    const newModels: Record<string, OpencodeModelConfig> = {
-      'new-model': {
-        name: 'new-model',
-        tool_call: true,
-        reasoning: false,
-        limit: { context: 8192, output: 8192 },
-        modalities: { input: ['text' as const], output: ['text' as const] },
-      },
-    }
+    const [m] = toModelInfos('litellm', models)
 
-    injectModelsIntoConfig(config, 'litellm', 'https://litellm.example.com', 'sk-test-key', newModels)
-
-    // Existing options should be preserved
-    expect(config.provider!.litellm.options).toEqual({
-      baseURL: 'https://old.example.com',
-      apiKey: 'old-key',
-      extra: 'value',
-    })
-
-    // Models should be merged
-    expect(config.provider!.litellm.models).toEqual({
-      'existing-model': {
-        name: 'existing-model',
-        tool_call: true,
-        reasoning: false,
-        limit: { context: 4096, output: 4096 },
-        modalities: { input: ['text' as const], output: ['text' as const] },
-      },
-      'new-model': {
-        name: 'new-model',
-        tool_call: true,
-        reasoning: false,
-        limit: { context: 8192, output: 8192 },
-        modalities: { input: ['text' as const], output: ['text' as const] },
-      },
-    })
+    expect(m.cost).toEqual([
+      { input: 5, output: 25, cache: { read: 0.5, write: 3.75 } },
+    ])
   })
 
-  it('preserves existing provider options when merging', async () => {
-    const config: TestConfig = {
-      provider: {
-        litellm: {
-          npm: '@ai-sdk/openai-compatible',
-          name: 'litellm',
-          options: {
-            baseURL: 'https://preserved.example.com',
-            apiKey: 'preserved-key',
-            customHeader: 'custom-value',
-          },
-          models: {},
-        },
-      },
+  it('defaults missing cache costs to 0', () => {
+    const models: Record<string, DiscoveredModel> = {
+      gpt: { name: 'gpt', limit: { context: 8, output: 8 }, cost: { input: 1, output: 2 } },
     }
 
-    const newModels: Record<string, OpencodeModelConfig> = {
-      'gpt-4': {
-        name: 'gpt-4',
-        tool_call: true,
-        reasoning: false,
-        limit: { context: 8192, output: 8192 },
-        modalities: { input: ['text' as const], output: ['text' as const] },
-      },
+    const [m] = toModelInfos('litellm', models)
+
+    expect(m.cost).toEqual([
+      { input: 1, output: 2, cache: { read: 0, write: 0 } },
+    ])
+  })
+
+  it('applies defaults for missing capabilities and modalities', () => {
+    const models: Record<string, DiscoveredModel> = {
+      bare: { name: 'bare', limit: { context: 4096, output: 4096 } },
     }
 
-    injectModelsIntoConfig(config, 'litellm', 'https://litellm.example.com', 'sk-test-key', newModels)
+    const [m] = toModelInfos('litellm', models)
 
-    // All existing options should be preserved
-    const provider = config.provider!.litellm
-    expect(provider.options!.baseURL).toBe('https://preserved.example.com')
-    expect(provider.options!.apiKey).toBe('preserved-key')
-    expect(provider.options!.customHeader).toBe('custom-value')
-
-    // New models should be added
-    expect(Object.keys(provider.models!)).toContain('gpt-4')
+    expect(m.capabilities).toEqual({ tools: true, input: ['text'], output: ['text'] })
   })
 })

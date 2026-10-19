@@ -1,11 +1,10 @@
 {
   "name": "opencode-provider-litellm",
-  "version": "0.10.0",
-  "description": "OpenCode plugin for any LiteLLM proxy — auto-discovers models, auth, and capabilities",
+  "version": "1.0.0",
+  "description": "OpenCode V2 plugin for any LiteLLM proxy — auto-discovers models, auth, and capabilities",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./server": "./src/index.ts"
+    ".": "./src/index.ts"
   },
   "files": [
     "src"
@@ -29,16 +28,17 @@
     "url": "git+https://github.com/danielcherubini/opencode-provider-litellm.git"
   },
   "engines": {
-    "opencode": ">=1.14.0"
+    "opencode": ">=2.0.0"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "latest"
+    "@opencode/plugin": "2.0.32",
+    "@opencode/schema": "2.0.32"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
-    "vitest": "^3.0.0",
     "@vitest/coverage-v8": "^3.0.0",
-    "esbuild": "^0.27.0"
+    "esbuild": "^0.27.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

@@ -1,5 +1,6 @@
-import type { PluginConfig, OpencodeModelConfig } from './types.js'
-import type { Config } from '@opencode-ai/plugin'
+import { Model, Provider } from '@opencode/plugin'
+import { Money } from '@opencode/schema'
+import type { PluginConfig, DiscoveredModel } from './types.js'
 
 interface LiteLLMHealthModel {
   model: string
@@ -25,12 +26,12 @@ interface LiteLLMModelInfo {
 /**
  * Fetches available models from the LiteLLM proxy's /v1/model/info endpoint.
  * Falls back to /health + /model/info per model for older LiteLLM versions.
- * Maps the metadata to OpenCode's model config format.
+ * Maps the metadata to the plugin's DiscoveredModel format.
  */
 export async function discoverModels(
   config: PluginConfig,
   getToken: () => Promise<string>,
-): Promise<Record<string, OpencodeModelConfig>> {
+): Promise<Record<string, DiscoveredModel>> {
   const token = await getToken()
 
   const controller = new AbortController()
@@ -51,7 +52,7 @@ export async function discoverModels(
       const modelData = modelInfoBody.data as Array<{ model_name?: string; model_info?: LiteLLMModelInfo }> | undefined
 
       if (Array.isArray(modelData) && modelData.length > 0) {
-        const models: Record<string, OpencodeModelConfig> = {}
+        const models: Record<string, DiscoveredModel> = {}
 
         for (const entry of modelData) {
           if (!entry?.model_name) continue
@@ -64,7 +65,7 @@ export async function discoverModels(
           if (info.supports_audio_input) inputModalities.push('audio')
           if (info.supports_pdf_input) inputModalities.push('pdf')
 
-          const modelConfig: OpencodeModelConfig = {
+          const modelConfig: DiscoveredModel = {
             name: modelName,
             tool_call: info.supports_function_calling ?? true,
             reasoning: info.supports_reasoning ?? false,
@@ -147,8 +148,8 @@ export async function discoverModels(
       }),
     )
 
-    // Map to OpenCode model config
-    const models: Record<string, OpencodeModelConfig> = {}
+    // Map to the plugin's DiscoveredModel format
+    const models: Record<string, DiscoveredModel> = {}
 
     for (let i = 0; i < healthyEndpoints.length; i++) {
       const info = modelInfos[i]
@@ -160,7 +161,7 @@ export async function discoverModels(
       if (info.supports_audio_input) inputModalities.push('audio')
       if (info.supports_pdf_input) inputModalities.push('pdf')
 
-      const modelConfig: OpencodeModelConfig = {
+      const modelConfig: DiscoveredModel = {
         name: modelName,
         tool_call: info.supports_function_calling ?? true,
         reasoning: info.supports_reasoning ?? false,
@@ -208,40 +209,71 @@ export async function discoverModels(
 }
 
 /**
- * Injects discovered models into an OpenCode config under the given provider name.
- * Merges with existing provider config without overwriting options.
+ * Builds the OpenCode V2 provider entry for the LiteLLM proxy.
+ *
+ * Uses the built-in openai-compatible provider package; the plugin
+ * contributes the connection settings (baseURL + current API key). The
+ * openai-compatible driver appends /chat/completions to the baseURL, so
+ * point it at the proxy's /v1 prefix (LITELLM_URL stays the proxy root —
+ * discovery calls <root>/v1/model/info).
  */
-export function injectModelsIntoConfig(
-  config: Config,
-  providerName: string,
-  baseUrl: string,
+export function toProviderInfo(
+  providerId: string,
+  url: string,
   apiKey: string,
-  models: Record<string, OpencodeModelConfig>,
-): void {
-  if (!config.provider) {
-    config.provider = {}
+): Provider.Info {
+  const id = Provider.ID.make(providerId)
+  const root = url.replace(/\/+$/, '')
+  return {
+    ...Provider.Info.empty(id),
+    name: providerId,
+    activation: 'enabled',
+    package: '@opencode/ai/providers/openai-compatible',
+    settings: { baseURL: /\/v1$/.test(root) ? root : `${root}/v1`, apiKey },
   }
+}
 
-  const existing = config.provider[providerName]
+/**
+ * Maps discovered models to OpenCode V2 Model.Info entries.
+ */
+export function toModelInfos(
+  providerId: string,
+  models: Record<string, DiscoveredModel>,
+): Model.Info[] {
+  const pid = Provider.ID.make(providerId)
 
-  if (existing) {
-    // Preserve existing options, merge models
-    // Set defaults for incomplete provider entries
-    if (!existing.npm) existing.npm = '@ai-sdk/openai-compatible'
-    if (!existing.name) existing.name = providerName
-    if (!existing.options) {
-      existing.options = { baseURL: baseUrl, apiKey }
-    }
-    existing.models = { ...existing.models, ...models }
-  } else {
-    config.provider[providerName] = {
-      npm: '@ai-sdk/openai-compatible',
-      name: providerName,
-      options: {
-        baseURL: baseUrl,
-        apiKey,
+  return Object.entries(models).map(([modelId, m]) => ({
+    ...Model.Info.default(pid, Model.ID.make(modelId)),
+    name: m.name,
+    capabilities: {
+      tools: m.tool_call ?? true,
+      input: m.modalities?.input ?? ['text'],
+      output: m.modalities?.output ?? ['text'],
+    },
+    limit: {
+      context: m.limit.context,
+      output: m.limit.output,
+    },
+    cost: toCostTiers(m.cost),
+  }))
+}
+
+/**
+ * Maps the flat per-1M cost fields to V2 cost tiers.
+ * Absent cache costs default to 0 (the tier requires both).
+ */
+function toCostTiers(cost: DiscoveredModel['cost']): Model.Info['cost'] {
+  if (!cost) return []
+
+  const usd = (n: number) => Money.USDPerMillionTokens.make(n)
+  return [
+    Model.Cost.make({
+      input: usd(cost.input),
+      output: usd(cost.output),
+      cache: {
+        read: usd(cost.cache_read ?? 0),
+        write: usd(cost.cache_write ?? 0),
       },
-      models,
-    }
-  }
+    }),
+  ]
 }

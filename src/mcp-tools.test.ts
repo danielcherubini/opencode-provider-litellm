@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { tool } from '@opencode-ai/plugin'
 import type { PluginConfig, McpTool } from './types.js'
 import { discoverMcpTools, executeMcpTool, createMcpToolDefinitions } from './mcp-tools.js'
 
@@ -275,6 +274,38 @@ describe('executeMcpTool', () => {
 
     expect(result).toContain('Error calling search on brave')
   })
+
+  it('returns an error when the external signal is aborted', async () => {
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      return new Promise<string>((_resolve, reject) => {
+        const signal = init?.signal
+        if (!signal) return
+        // real fetch rejects immediately when given an already-aborted signal
+        if (signal.aborted) {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+          return
+        }
+        signal.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        }, { once: true })
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const controller = new AbortController()
+    controller.abort()
+
+    const result = await executeMcpTool(
+      config,
+      token,
+      'brave',
+      'search',
+      { query: 'test' },
+      controller.signal,
+    )
+
+    expect(result).toContain('Error calling search on brave')
+  })
 })
 
 describe('createMcpToolDefinitions', () => {
@@ -313,12 +344,11 @@ describe('createMcpToolDefinitions', () => {
 
     const result = await createMcpToolDefinitions(config, token)
 
-    expect(Object.keys(result)).toEqual(['mcp_brave_api_web_search'])
-    const toolDef = result['mcp_brave_api_web_search']
-    expect(toolDef.description).toBe('Search the web (via Brave-API MCP server)')
+    expect(result.map((t) => t.name)).toEqual(['mcp_brave_api_web_search'])
+    expect(result[0].description).toBe('Search the web (via Brave-API MCP server)')
   })
 
-  it('returns {} when no tools discovered', async () => {
+  it('returns [] when no tools discovered', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -327,10 +357,10 @@ describe('createMcpToolDefinitions', () => {
     vi.stubGlobal('fetch', mockFetch)
 
     const result = await createMcpToolDefinitions(config, token)
-    expect(result).toEqual({})
+    expect(result).toEqual([])
   })
 
-  it('maps JSON Schema types correctly', async () => {
+  it('passes object input_schemas through as JSON Schema', async () => {
     const mockTools: McpTool[] = [
       {
         name: 'test_tool',
@@ -357,122 +387,38 @@ describe('createMcpToolDefinitions', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createMcpToolDefinitions(config, token)
+    const [toolDef] = await createMcpToolDefinitions(config, token)
 
-    const toolDef = result['mcp_test_server_test_tool']
-    expect(toolDef).toBeDefined()
-
-    // Check that args were built correctly
-    const args = toolDef.args
-    expect(args).toBeDefined()
-
-    const z = tool.schema
-
-    // Required string field
-    expect(args.name).toBeInstanceOf(z.ZodString)
-    expect(args.name.isOptional()).toBe(false)
-
-    // Required number field
-    expect(args.count).toBeInstanceOf(z.ZodNumber)
-    expect(args.count.isOptional()).toBe(false)
-
-    // Required boolean field
-    expect(args.is_active).toBeInstanceOf(z.ZodBoolean)
-    expect(args.is_active.isOptional()).toBe(false)
-
-    // Required array field
-    expect(args.tags).toBeInstanceOf(z.ZodArray)
-    expect(args.tags.isOptional()).toBe(false)
-
-    // Optional field
-    expect(args.optional_val.isOptional()).toBe(true)
+    expect(toolDef.input).toEqual({
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        count: { type: 'number' },
+        is_active: { type: 'boolean' },
+        tags: { type: 'array', items: { type: 'string' } },
+        optional_val: { type: 'string' },
+      },
+      required: ['name', 'count', 'is_active', 'tags'],
+    })
   })
 
-  it('falls back to single-arg mode for unmappable schemas', async () => {
+  it('passes complex schemas (nested objects, $ref, anyOf) through unchanged', async () => {
     const mockTools: McpTool[] = [
       {
         name: 'complex_tool',
         server_name: 'complex_server',
-        description: 'Complex tool with nested schema',
+        description: 'Complex tool',
         input_schema: {
           type: 'object',
           properties: {
             nested: {
               type: 'object',
-              properties: {
-                deep: { type: 'string' },
-              },
+              properties: { deep: { type: 'string' } },
             },
-          },
-          required: ['nested'],
-        },
-      },
-    ]
-
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => mockTools,
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
-    const result = await createMcpToolDefinitions(config, token)
-
-    const toolDef = result['mcp_complex_server_complex_tool']
-    expect(toolDef).toBeDefined()
-
-    // Should fall back to single-arg mode
-    const args = toolDef.args
-    expect(args.args).toBeDefined()
-    expect(args.args).toBeInstanceOf(tool.schema.ZodRecord)
-  })
-
-  it('falls back to single-arg mode for $ref schemas', async () => {
-    const mockTools: McpTool[] = [
-      {
-        name: 'ref_tool',
-        server_name: 'ref_server',
-        description: 'Tool with $ref',
-        input_schema: {
-          type: 'object',
-          properties: {
             data: { $ref: '#/definitions/Data' },
-          },
-          required: ['data'],
-        },
-      },
-    ]
-
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => mockTools,
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
-    const result = await createMcpToolDefinitions(config, token)
-
-    const toolDef = result['mcp_ref_server_ref_tool']
-    expect(toolDef).toBeDefined()
-
-    // Should fall back to single-arg mode
-    const args = toolDef.args
-    expect(args.args).toBeDefined()
-    expect(args.args).toBeInstanceOf(tool.schema.ZodRecord)
-  })
-
-  it('falls back to single-arg mode for anyOf schemas', async () => {
-    const mockTools: McpTool[] = [
-      {
-        name: 'anyof_tool',
-        server_name: 'anyof_server',
-        description: 'Tool with anyOf',
-        input_schema: {
-          type: 'object',
-          properties: {
             value: { anyOf: [{ type: 'string' }, { type: 'number' }] },
           },
-          required: ['value'],
+          required: ['nested', 'data'],
         },
       },
     ]
@@ -484,18 +430,51 @@ describe('createMcpToolDefinitions', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createMcpToolDefinitions(config, token)
+    const [toolDef] = await createMcpToolDefinitions(config, token)
 
-    const toolDef = result['mcp_anyof_server_anyof_tool']
-    expect(toolDef).toBeDefined()
-
-    // Should fall back to single-arg mode
-    const args = toolDef.args
-    expect(args.args).toBeDefined()
-    expect(args.args).toBeInstanceOf(tool.schema.ZodRecord)
+    expect(toolDef.input).toEqual({
+      type: 'object',
+      properties: {
+        nested: {
+          type: 'object',
+          properties: { deep: { type: 'string' } },
+        },
+        data: { $ref: '#/definitions/Data' },
+        value: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+      },
+      required: ['nested', 'data'],
+    })
   })
 
-  it('execute function calls executeMcpTool correctly', async () => {
+  it('falls back to single-arg mode for non-object schemas', async () => {
+    const mockTools: McpTool[] = [
+      {
+        name: 'no_schema_tool',
+        server_name: 'plain_server',
+        description: 'Tool without a usable schema',
+        input_schema: {},
+      },
+    ]
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockTools,
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const [toolDef] = await createMcpToolDefinitions(config, token)
+
+    expect(toolDef.input).toEqual({
+      type: 'object',
+      properties: {
+        args: { type: 'object', description: 'Tool arguments as key-value pairs' },
+      },
+      required: ['args'],
+    })
+  })
+
+  it('execute returns { content } with the formatted result', async () => {
     let callCount = 0
     const mockFetch = vi.fn().mockImplementation((_url: string, _init: RequestInit) => {
       callCount++
@@ -525,46 +504,51 @@ describe('createMcpToolDefinitions', () => {
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createMcpToolDefinitions(config, token)
+    const [toolDef] = await createMcpToolDefinitions(config, token)
 
-    const toolDef = result['mcp_brave_search']
-    expect(toolDef).toBeDefined()
-
-    // Call execute
-    const executeResult = await toolDef.execute({ query: 'test' }, {} as any)
-    expect(executeResult).toBe(JSON.stringify({ content: [{ type: 'text', text: 'found' }] }, null, 2))
+    const { content } = await toolDef.execute(
+      { query: 'test' },
+      { signal: new AbortController().signal },
+    )
+    expect(content).toBe(JSON.stringify({ content: [{ type: 'text', text: 'found' }] }, null, 2))
     expect(callCount).toBe(2)
+
+    const body = JSON.parse((mockFetch.mock.calls[1][1] as RequestInit).body as string)
+    expect(body).toEqual({ server: 'brave', tool: 'search', args: { query: 'test' } })
   })
 
-  it('maps integer type to number()', async () => {
-    const mockTools: McpTool[] = [
-      {
-        name: 'int_tool',
-        server_name: 'int_server',
-        description: 'Tool with integer',
-        input_schema: {
-          type: 'object',
-          properties: {
-            page: { type: 'integer' },
-          },
-          required: ['page'],
-        },
-      },
-    ]
-
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => mockTools,
+  it('execute unwraps the args field in single-arg mode', async () => {
+    let callCount = 0
+    const mockFetch = vi.fn().mockImplementation((_url: string, _init: RequestInit) => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => [{
+            name: 'complex',
+            server_name: 'srv',
+            description: 'Complex tool',
+            input_schema: {},
+          }],
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ result: 'ok' }),
+      })
     })
     vi.stubGlobal('fetch', mockFetch)
 
-    const result = await createMcpToolDefinitions(config, token)
+    const [toolDef] = await createMcpToolDefinitions(config, token)
 
-    const toolDef = result['mcp_int_server_int_tool']
-    expect(toolDef).toBeDefined()
+    await toolDef.execute(
+      { args: { a: 1 } },
+      { signal: new AbortController().signal },
+    )
 
-    const args = toolDef.args
-    expect(args.page).toBeInstanceOf(tool.schema.ZodNumber)
+    const body = JSON.parse((mockFetch.mock.calls[1][1] as RequestInit).body as string)
+    expect(body.args).toEqual({ a: 1 })
   })
 })

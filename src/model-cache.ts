@@ -1,28 +1,34 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
-import type { OpencodeModelConfig } from './types.js'
+import type { Schema } from 'effect'
+import type { Plugin } from '@opencode/plugin'
+import type { DiscoveredModel } from './types.js'
 
-const CACHE_FILENAME = 'opencode-provider-litellm-cache.json'
+const CACHE_PREFIX = 'model-cache/'
 
 interface ModelCache {
   savedAt: number
   providerId: string
-  models: Record<string, OpencodeModelConfig>
+  models: Record<string, DiscoveredModel>
 }
 
-function getCachePath(): string {
-  return join(homedir(), '.local', 'share', 'opencode', CACHE_FILENAME)
+function cacheKey(providerId: string): string {
+  return `${CACHE_PREFIX}${providerId}`
 }
 
 /**
- * Loads the model cache from disk. Returns null if the file does not exist,
- * cannot be parsed, or belongs to a different provider.
+ * Loads the model cache from plugin storage. Returns null when the cache
+ * does not exist, cannot be parsed, or belongs to a different provider.
+ * Storage is durable JSON scoped to the plugin (replaces the old
+ * ~/.local/share/opencode/opencode-provider-litellm-cache.json file).
  */
-export function loadModelCache(providerId: string): Record<string, OpencodeModelConfig> | null {
+export async function loadModelCache(
+  ctx: Plugin.Context,
+  providerId: string,
+): Promise<Record<string, DiscoveredModel> | null> {
   try {
-    const raw = readFileSync(getCachePath(), 'utf-8')
-    const cache = JSON.parse(raw) as ModelCache
+    const raw = await ctx.storage.get(cacheKey(providerId))
+    if (raw === undefined || raw === null) return null
+
+    const cache = raw as unknown as ModelCache
     if (cache.providerId !== providerId) return null
     if (!cache.models || typeof cache.models !== 'object') return null
     return cache.models
@@ -32,17 +38,23 @@ export function loadModelCache(providerId: string): Record<string, OpencodeModel
 }
 
 /**
- * Saves the discovered models to the cache file on disk. Failures are
- * non-fatal — discovery already succeeded.
+ * Saves the discovered models to plugin storage. Failures are non-fatal —
+ * discovery already succeeded.
  */
-export function saveModelCache(providerId: string, models: Record<string, OpencodeModelConfig>): void {
+export async function saveModelCache(
+  ctx: Plugin.Context,
+  providerId: string,
+  models: Record<string, DiscoveredModel>,
+): Promise<void> {
   try {
     const cache: ModelCache = {
       savedAt: Date.now(),
       providerId,
       models,
     }
-    writeFileSync(getCachePath(), JSON.stringify(cache, null, 2), 'utf-8')
+    // The cache is plain JSON; the structural Json type requires index
+    // signatures the ModelCache interface does not declare.
+    await ctx.storage.set(cacheKey(providerId), cache as unknown as Schema.Json)
   } catch {
     // Non-fatal — cache will be written next time
   }

@@ -1,22 +1,8 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import type { OpencodeModelConfig } from './types.js'
+import { describe, it, expect, vi } from 'vitest'
+import type { DiscoveredModel } from './types.js'
+import { loadModelCache, saveModelCache } from './model-cache.js'
 
-const mockReadFileSync = vi.hoisted(() => vi.fn())
-const mockWriteFileSync = vi.hoisted(() => vi.fn())
-
-vi.mock('fs', () => ({
-  existsSync: vi.fn(() => true),
-  readFileSync: mockReadFileSync,
-  writeFileSync: mockWriteFileSync,
-}))
-
-vi.mock('os', () => ({
-  homedir: () => '/home/test',
-}))
-
-const { loadModelCache, saveModelCache } = await import('./model-cache.js')
-
-const sampleModels: Record<string, OpencodeModelConfig> = {
+const sampleModels: Record<string, DiscoveredModel> = {
   'anthropic/claude-sonnet': {
     name: 'anthropic/claude-sonnet',
     tool_call: true,
@@ -34,82 +20,108 @@ const sampleModels: Record<string, OpencodeModelConfig> = {
   },
 }
 
+function makeCtx(storage: {
+  get: (key: string) => Promise<unknown>
+  set: (key: string, value: unknown) => Promise<void>
+}) {
+  return { storage } as never
+}
+
 describe('loadModelCache', () => {
-  afterEach(() => vi.clearAllMocks())
-
-  it('returns null when file does not exist', () => {
-    mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT') })
-    expect(loadModelCache('protector')).toBeNull()
+  it('returns null when no cache is stored', async () => {
+    const ctx = makeCtx({ get: vi.fn().mockResolvedValue(undefined), set: vi.fn() })
+    expect(await loadModelCache(ctx, 'protector')).toBeNull()
   })
 
-  it('returns null when file contains invalid JSON', () => {
-    mockReadFileSync.mockReturnValue('not valid json{{{')
-    expect(loadModelCache('protector')).toBeNull()
+  it('returns null when storage.get rejects', async () => {
+    const ctx = makeCtx({
+      get: vi.fn().mockRejectedValue(new Error('storage down')),
+      set: vi.fn(),
+    })
+    expect(await loadModelCache(ctx, 'protector')).toBeNull()
   })
 
-  it('returns null when providerId does not match', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'other', models: sampleModels,
-    }))
-    expect(loadModelCache('protector')).toBeNull()
+  it('returns null when providerId does not match', async () => {
+    const ctx = makeCtx({
+      get: vi.fn().mockResolvedValue({
+        savedAt: Date.now(),
+        providerId: 'other',
+        models: sampleModels,
+      }),
+      set: vi.fn(),
+    })
+    expect(await loadModelCache(ctx, 'protector')).toBeNull()
   })
 
-  it('returns null when models field is missing', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'protector', models: null,
-    }))
-    expect(loadModelCache('protector')).toBeNull()
+  it('returns null when models field is missing', async () => {
+    const ctx = makeCtx({
+      get: vi.fn().mockResolvedValue({
+        savedAt: Date.now(),
+        providerId: 'protector',
+        models: null,
+      }),
+      set: vi.fn(),
+    })
+    expect(await loadModelCache(ctx, 'protector')).toBeNull()
   })
 
-  it('returns models when cache is valid', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'protector', models: sampleModels,
-    }))
-    expect(loadModelCache('protector')).toEqual(sampleModels)
+  it('returns models when cache is valid', async () => {
+    const ctx = makeCtx({
+      get: vi.fn().mockResolvedValue({
+        savedAt: Date.now(),
+        providerId: 'protector',
+        models: sampleModels,
+      }),
+      set: vi.fn(),
+    })
+    expect(await loadModelCache(ctx, 'protector')).toEqual(sampleModels)
   })
 
-  it('reads from the correct path', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({
-      savedAt: Date.now(), providerId: 'protector', models: sampleModels,
-    }))
-    loadModelCache('protector')
-    expect(mockReadFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('opencode-provider-litellm-cache.json'),
-      'utf-8',
-    )
+  it('reads from the model-cache/<providerId> key', async () => {
+    const get = vi.fn().mockResolvedValue(undefined)
+    const ctx = makeCtx({ get, set: vi.fn() })
+
+    await loadModelCache(ctx, 'protector')
+
+    expect(get).toHaveBeenCalledWith('model-cache/protector')
   })
 })
 
 describe('saveModelCache', () => {
-  afterEach(() => vi.clearAllMocks())
+  it('writes the cache under model-cache/<providerId>', async () => {
+    const set = vi.fn().mockResolvedValue(undefined)
+    const ctx = makeCtx({ get: vi.fn(), set })
 
-  it('writes a valid cache file', () => {
-    saveModelCache('protector', sampleModels)
-    expect(mockWriteFileSync).toHaveBeenCalledOnce()
-    const [filePath, content] = mockWriteFileSync.mock.calls[0] as [string, string, string]
-    expect(filePath).toContain('opencode-provider-litellm-cache.json')
-    const parsed = JSON.parse(content)
-    expect(parsed.providerId).toBe('protector')
-    expect(parsed.models).toEqual(sampleModels)
-    expect(typeof parsed.savedAt).toBe('number')
+    await saveModelCache(ctx, 'protector', sampleModels)
+
+    expect(set).toHaveBeenCalledOnce()
+    const [key, value] = set.mock.calls[0] as [string, Record<string, unknown>]
+    expect(key).toBe('model-cache/protector')
+    expect(value.providerId).toBe('protector')
+    expect(value.models).toEqual(sampleModels)
+    expect(typeof value.savedAt).toBe('number')
   })
 
-  it('writes to the correct path under ~/.local/share/opencode/', () => {
-    saveModelCache('protector', sampleModels)
-    const [filePath] = mockWriteFileSync.mock.calls[0] as [string, string, string]
-    expect(filePath).toMatch(/\.local[/\\]share[/\\]opencode[/\\]opencode-provider-litellm-cache\.json/)
+  it('does not throw when storage.set rejects', async () => {
+    const ctx = makeCtx({
+      get: vi.fn(),
+      set: vi.fn().mockRejectedValue(new Error('EACCES')),
+    })
+
+    await expect(saveModelCache(ctx, 'protector', sampleModels)).resolves.toBeUndefined()
   })
 
-  it('does not throw when writeFileSync fails', () => {
-    mockWriteFileSync.mockImplementation(() => { throw new Error('EACCES') })
-    expect(() => saveModelCache('protector', sampleModels)).not.toThrow()
-  })
+  it('round-trips correctly with loadModelCache', async () => {
+    let stored: unknown
+    const ctx = makeCtx({
+      get: vi.fn().mockImplementation(async () => stored),
+      set: vi.fn().mockImplementation(async (_key: string, value: unknown) => {
+        stored = value
+      }),
+    })
 
-  it('round-trips correctly with loadModelCache', () => {
-    let written = ''
-    mockWriteFileSync.mockImplementation((_p: string, content: string) => { written = content })
-    mockReadFileSync.mockImplementation(() => written)
-    saveModelCache('protector', sampleModels)
-    expect(loadModelCache('protector')).toEqual(sampleModels)
+    await saveModelCache(ctx, 'protector', sampleModels)
+
+    expect(await loadModelCache(ctx, 'protector')).toEqual(sampleModels)
   })
 })
