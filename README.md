@@ -1,6 +1,8 @@
 # opencode-provider-litellm
 
-OpenCode plugin for any [LiteLLM](https://github.com/BerriAI/litellm) proxy — auto-discovers models, MCP tools, and auth. Zero config, zero hand-maintained model lists.
+OpenCode v2 plugin for any [LiteLLM](https://github.com/BerriAI/litellm) proxy — auto-discovers models, MCP tools, and auth. Zero config, zero hand-maintained model lists.
+
+Compatible with **OpenCode >= 2.0.0**.
 
 ## Quick start
 
@@ -9,10 +11,11 @@ OpenCode plugin for any [LiteLLM](https://github.com/BerriAI/litellm) proxy — 
 export LITELLM_URL="https://your-litellm-proxy.example.com"
 export LITELLM_KEY="sk-..."
 
-# 2. Install the plugin
-opencode plugin opencode-provider-litellm
+# 2. Add the plugin to OpenCode
+opencode plugin add opencode-provider-litellm
 
-# 3. Restart OpenCode
+# 3. Check available models
+opencode models
 ```
 
 All models and MCP tools from your LiteLLM proxy appear in OpenCode automatically.
@@ -33,20 +36,40 @@ Environment variables take precedence over all other configuration. Use them to 
 
 *`LITELLM_KEY` is optional when `LITELLM_GCLOUD_TOKEN_AUTH=1`.
 
-### Plugin options
+### OpenCode v2 Plugin Configuration (`opencode.json` / `opencode.jsonc`)
 
-All env vars have an equivalent in the plugin options block in `opencode.json`. **Env vars take precedence** — use options for defaults that can be overridden per environment.
+All environment variables have an equivalent in the plugin options block in `opencode.json`. **Environment variables take precedence** over options.
+
+In OpenCode v2, plugins are specified under the `plugins` array:
 
 ```jsonc
 {
-  "plugin": [
-    ["opencode-provider-litellm", {
-      "url": "https://your-litellm-proxy.example.com",  // LITELLM_URL
-      "apiKey": "sk-...",                                // LITELLM_KEY
-      "providerName": "MyLiteLLM",                       // LITELLM_PROVIDER_ID
-      "gcloudTokenAuth": true                            // LITELLM_GCLOUD_TOKEN_AUTH=1
-      // apiKey can be omitted when gcloudTokenAuth is true
-    }]
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "opencode-provider-litellm",
+      "options": {
+        "url": "https://your-litellm-proxy.example.com",  // LITELLM_URL
+        "apiKey": "sk-..."                                // LITELLM_KEY (optional if gcloud ADC is used)
+      }
+    }
+  ]
+}
+```
+
+For local development or testing from a local clone, set `"package"` to the directory path:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "/path/to/opencode-provider-litellm",
+      "options": {
+        "url": "http://127.0.0.1:4000",
+        "apiKey": "sk-..."
+      }
+    }
   ]
 }
 ```
@@ -63,11 +86,11 @@ gcloud auth application-default login
 export LITELLM_URL="https://your-litellm-proxy.example.com"
 export LITELLM_GCLOUD_TOKEN_AUTH=1
 
-# 3. Install and restart OpenCode
-opencode plugin opencode-provider-litellm
+# 3. Add plugin and verify models
+opencode models
 ```
 
-The plugin reads your [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) JSON file and exchanges the refresh token for an access token. Tokens are cached for 50 minutes and used for both model discovery at startup and every LLM request.
+The plugin reads your [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) JSON file and exchanges the refresh token for an access token. Tokens are cached for 50 minutes and refreshed automatically for model discovery and LLM requests.
 
 **ADC file locations searched (in order):**
 1. `GOOGLE_APPLICATION_CREDENTIALS` env var (all platforms)
@@ -76,55 +99,45 @@ The plugin reads your [Application Default Credentials](https://cloud.google.com
 
 > **Note:** Only `authorized_user` credentials (from `gcloud auth application-default login`) are supported. Service account keys are not yet supported.
 
-### /connect flow
-
-You can also authenticate interactively via the OpenCode TUI:
-
-1. Run `/connect`
-2. Select **LiteLLM**
-3. Paste your API key
-
-The key is stored in OpenCode's auth store.
-
 ## Features
 
 ### Model discovery
 
-Queries LiteLLM on startup and injects all models with rich metadata into OpenCode:
+Queries LiteLLM on startup and registers all models with complete capabilities and limits into OpenCode's catalog:
 
-- `/health` — model list with internal UUIDs
-- `/model/info?litellm_model_id={uuid}` — costs, context limits, vision, tool calling, reasoning, etc.
+- `/v1/model/info` (or `/health` + `/model/info`) — model metadata, costs, context limits, vision, tool calling, reasoning, etc.
+- Local model cache is stored on disk so available models load instantly across restarts while background discovery updates the registry.
 
 Custom `model_info` updates via `/model/update` are respected — no hardcoded fallbacks.
 
 ### MCP tools
 
-Discovers tools registered on LiteLLM's MCP servers at startup and exposes them as native OpenCode tools. Each tool keeps its original description and parameter schema.
+Discovers tools registered on LiteLLM's MCP servers at startup and registers them into OpenCode with native JSON Schema parameter definitions. Each tool keeps its original description and server namespace.
 
 ### Skills
 
-Skills registered in LiteLLM's [Skills Gateway](https://docs.litellm.ai/docs/skills_gateway) are made available to OpenCode via the [proxy-sidecar](../llm-server/proxy-sidecar/), which serves skills in OpenCode's native format. Add the sidecar URL to your config:
+Skills registered in LiteLLM's [Skills Gateway](https://docs.litellm.ai/docs/skills_gateway) can be added to your OpenCode configuration:
 
 ```jsonc
 {
-  "skills": {
-    "urls": ["https://your-litellm-proxy.example.com/opencode/skills"]
-  }
+  "skills": [
+    "https://your-litellm-proxy.example.com/opencode/skills"
+  ]
 }
 ```
 
 Skills appear in OpenCode's `/skills` menu and are loaded natively by the agent.
 
-## How it works
+## OpenCode v2 Architecture
 
-The plugin uses these OpenCode hooks:
+This plugin is built natively for OpenCode v2 using `@opencode/plugin` and `@opencode/schema`:
 
-| Hook | Purpose |
-|------|---------|
-| `config` | Discovers models from LiteLLM and injects them into OpenCode |
-| `auth` | Provides a `/connect` entry point for pasting an API key |
-| `tool` | Exposes discovered MCP tools as native OpenCode tools |
-| `chat.headers` | Injects `Authorization: Bearer <token>` when gcloud token auth is enabled |
+| Domain | Mechanism | Purpose |
+|--------|-----------|---------|
+| **Provider & Models** | `ctx.provider.transform` / `ctx.catalog.transform` | Registers the `LiteLLM` provider using `@opencode/ai/providers/openai-compatible` and adds discovered models with context limits, tool call capabilities, and pricing. |
+| **MCP Tools** | `ctx.tool.transform` | Exposes discovered MCP tools using native JSON Schema input definitions. |
+| **Auth & Session Tracking** | `ctx.session.hook("model.request", ..., { providerID })` | Injects dynamic Google ADC OAuth bearer tokens and `X-Litellm-Session-ID` conversation tracking per request, strictly scoped to the LiteLLM provider. |
+| **Thinking Normalization** | `ctx.session.hook("context", ..., { providerID })` | Normalizes Claude / Vertex AI `thinking` parameters (`adaptive` / `disabled`) across agent sessions. |
 
 ## Troubleshooting
 
@@ -132,7 +145,7 @@ The plugin uses these OpenCode hooks:
 |---------|----------|
 | "Plugin config error" | Set `LITELLM_URL` and `LITELLM_KEY` (or `LITELLM_GCLOUD_TOKEN_AUTH=1`) |
 | "Access denied" (403) | Verify the API key has access to the LiteLLM proxy |
-| "No models discovered" | Check the proxy is reachable and `/health` responds |
+| "No models discovered" | Check the proxy is reachable and `/v1/model/info` or `/health` responds |
 | No models with gcloud auth | Verify `gcloud auth application-default login` has been run and the ADC file exists |
 | Skills not showing | Verify the proxy-sidecar is running and the skills URL is in `opencode.json` |
 
@@ -141,6 +154,7 @@ The plugin uses these OpenCode hooks:
 ```bash
 npm install
 npm run typecheck
-npm run test
+npm run test:run
 npm run build
+npx tsx scripts/verify-v2.ts
 ```
