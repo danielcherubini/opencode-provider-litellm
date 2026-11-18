@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mapLiteLLMModel, resolvePluginConfig } from './utils.js'
+import { mapLiteLLMModel, resolvePluginConfig, getProviderId } from './utils.js'
 import type { LiteLLMModel } from './types.js'
 
 describe('mapLiteLLMModel', () => {
@@ -50,13 +50,28 @@ describe('mapLiteLLMModel', () => {
 describe('resolvePluginConfig', () => {
   const originalEnv = { ...process.env }
 
+  const clearAllEnv = () => {
+    delete process.env.LITELLM_URL
+    delete process.env.LITELLM_KEY
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    delete process.env.LITELLM_PROVIDER_ID
+    delete process.env.LITELLM_PROVIDER_PROTECTOR_BASE_URL
+    delete process.env.LITELLM_PROVIDER_PROTECTOR_API_KEY
+    delete process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH
+    delete process.env.LITELLM_PROVIDER_PROTECTOR_NAME
+  }
+
+  beforeEach(() => {
+    clearAllEnv()
+  })
+
   afterEach(() => {
     process.env = { ...originalEnv }
   })
 
   describe('environment variable priority', () => {
     beforeEach(() => {
-      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+      clearAllEnv()
     })
 
     it('returns config from env vars when both are set', () => {
@@ -94,8 +109,7 @@ describe('resolvePluginConfig', () => {
 
   describe('config options fallback', () => {
     beforeEach(() => {
-      delete process.env.LITELLM_URL
-      delete process.env.LITELLM_KEY
+      clearAllEnv()
     })
 
     it('returns config for valid input', () => {
@@ -144,7 +158,7 @@ describe('resolvePluginConfig', () => {
 
   describe('gcloud token auth', () => {
     beforeEach(() => {
-      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+      clearAllEnv()
     })
 
     it('allows missing LITELLM_KEY when LITELLM_GCLOUD_TOKEN_AUTH is set', () => {
@@ -190,6 +204,34 @@ describe('resolvePluginConfig', () => {
 
       const config = resolvePluginConfig({})
       expect(config).toEqual({ url: 'https://gcloud.example.com', apiKey: 'normal-key' })
+    })
+
+    it('supports Protector environment variables (LITELLM_PROVIDER_PROTECTOR_*)', () => {
+      process.env.LITELLM_PROVIDER_PROTECTOR_BASE_URL = 'https://protector.example.com'
+      process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH = 'true'
+
+      const config = resolvePluginConfig({})
+      expect(config).toEqual({ url: 'https://protector.example.com', apiKey: '' })
+    })
+  })
+
+  describe('getProviderId', () => {
+    beforeEach(() => {
+      clearAllEnv()
+    })
+
+    it('defaults to LiteLLM', () => {
+      expect(getProviderId()).toBe('LiteLLM')
+    })
+
+    it('reads LITELLM_PROVIDER_ID when set', () => {
+      process.env.LITELLM_PROVIDER_ID = 'custom-id'
+      expect(getProviderId()).toBe('custom-id')
+    })
+
+    it('falls back to LITELLM_PROVIDER_PROTECTOR_NAME when set', () => {
+      process.env.LITELLM_PROVIDER_PROTECTOR_NAME = 'protector'
+      expect(getProviderId()).toBe('protector')
     })
   })
 })

@@ -25,13 +25,20 @@ function normalizeThinkingParams(options: Record<string, unknown>): void {
 export const LiteLLMPlugin = Plugin.define({
   id: 'litellm',
   async setup(ctx) {
+    const isGcloudAuth = !!(
+      (process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
+        process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
+        process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0' &&
+        process.env.LITELLM_GCLOUD_TOKEN_AUTH !== 'false') ||
+      (process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH &&
+        process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH !== '' &&
+        process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH !== '0' &&
+        process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH !== 'false') ||
+      (ctx.options && typeof ctx.options === 'object' && (ctx.options as Record<string, unknown>).gcloudAuth === true)
+    )
+
     const pluginConfig = resolvePluginConfig(ctx.options)
     if (pluginConfig === null) {
-      const isGcloudAuth =
-        process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
-        process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
-        process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0'
-
       throw new Error(
         isGcloudAuth
           ? 'Plugin config error: set LITELLM_URL (LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1).'
@@ -42,12 +49,6 @@ export const LiteLLMPlugin = Plugin.define({
 
     const providerId = getProviderId()
     const providerID = Provider.ID.make(providerId)
-
-    const isGcloudAuth = !!(
-      process.env.LITELLM_GCLOUD_TOKEN_AUTH &&
-      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '' &&
-      process.env.LITELLM_GCLOUD_TOKEN_AUTH !== '0'
-    )
 
     const getToken = async (): Promise<string> => {
       if (isGcloudAuth) {

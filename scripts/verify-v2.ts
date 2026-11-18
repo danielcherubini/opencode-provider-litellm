@@ -157,6 +157,10 @@ async function main(): Promise<void> {
     delete cleanEnv.LITELLM_KEY
     delete cleanEnv.LITELLM_PROVIDER_ID
     delete cleanEnv.LITELLM_GCLOUD_TOKEN_AUTH
+    delete cleanEnv.LITELLM_PROVIDER_PROTECTOR_BASE_URL
+    delete cleanEnv.LITELLM_PROVIDER_PROTECTOR_API_KEY
+    delete cleanEnv.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH
+    delete cleanEnv.LITELLM_PROVIDER_PROTECTOR_NAME
     delete cleanEnv.OPENCODE_PASSWORD
     delete cleanEnv.OPENCODE_SERVER_PASSWORD
 

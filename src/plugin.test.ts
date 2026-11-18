@@ -135,10 +135,13 @@ describe('LiteLLMPlugin (OpenCode v2)', () => {
         execute: vi.fn().mockResolvedValue({ content: 'result' }),
       },
     ])
+    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    delete process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH
   })
 
   afterEach(() => {
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
+    delete process.env.LITELLM_PROVIDER_PROTECTOR_USE_GCLOUD_AUTH
   })
 
   it('defines plugin with id "litellm"', () => {
