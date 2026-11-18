@@ -1,3 +1,8 @@
+import type { Model } from '@opencode/schema/model'
+import type { Provider } from '@opencode/schema/provider'
+
+export type { Model, Provider }
+
 export interface PluginConfig {
   url: string
   apiKey: string
