@@ -251,3 +251,63 @@ export async function createMcpToolDefinitions(
 
   return definitions
 }
+
+export interface McpToolDefinition {
+  name: string
+  description: string
+  input: Record<string, unknown>
+  execute: (input: unknown) => Promise<{ content: string }>
+}
+
+/**
+ * Builds OpenCode v2 tool definitions using JSON Schema for all discovered MCP tools.
+ *
+ * Each MCP tool is registered with:
+ * - name: mcp_${sanitizeName(server_name)}_${sanitizeName(name)}
+ * - description: ${description || name} (via ${server_name} MCP server)
+ * - input: JSON Schema object
+ * - execute: returns { content: result }
+ */
+export async function buildMcpToolDefinitions(
+  config: PluginConfig,
+  getToken: () => Promise<string>,
+): Promise<McpToolDefinition[]> {
+  const token = await getToken()
+  const mcpTools = await discoverMcpTools(config, token)
+
+  if (mcpTools.length === 0) {
+    return []
+  }
+
+  return mcpTools.map((mcpTool) => {
+    const serverName = mcpTool.server_name
+    const toolName = mcpTool.name
+    const safeServer = sanitizeName(serverName)
+    const safeTool = sanitizeName(toolName)
+    const name = `mcp_${safeServer}_${safeTool}`
+    const description = `${mcpTool.description || toolName} (via ${serverName} MCP server)`
+    const input =
+      mcpTool.input_schema && typeof mcpTool.input_schema === 'object'
+        ? mcpTool.input_schema
+        : { type: 'object', properties: {} }
+
+    return {
+      name,
+      description,
+      input,
+      execute: async (args: unknown) => {
+        const freshToken = await getToken()
+        const normalizedArgs =
+          args && typeof args === 'object' ? (args as Record<string, unknown>) : {}
+        const result = await executeMcpTool(
+          config,
+          freshToken,
+          serverName,
+          toolName,
+          normalizedArgs,
+        )
+        return { content: result }
+      },
+    }
+  })
+}
