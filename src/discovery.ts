@@ -1,5 +1,4 @@
 import type { PluginConfig, OpencodeModelConfig } from './types.js'
-import type { Config } from '@opencode-ai/plugin'
 import { Provider, Model } from '@opencode/schema'
 
 interface LiteLLMHealthModel {
@@ -205,45 +204,6 @@ export async function discoverModels(
     return {}
   } finally {
     clearTimeout(timeoutId)
-  }
-}
-
-/**
- * Injects discovered models into an OpenCode config under the given provider name.
- * Merges with existing provider config without overwriting options.
- */
-export function injectModelsIntoConfig(
-  config: Config,
-  providerName: string,
-  baseUrl: string,
-  apiKey: string,
-  models: Record<string, OpencodeModelConfig>,
-): void {
-  if (!config.provider) {
-    config.provider = {}
-  }
-
-  const existing = config.provider[providerName]
-
-  if (existing) {
-    // Preserve existing options, merge models
-    // Set defaults for incomplete provider entries
-    if (!existing.npm) existing.npm = '@ai-sdk/openai-compatible'
-    if (!existing.name) existing.name = providerName
-    if (!existing.options) {
-      existing.options = { baseURL: baseUrl, apiKey }
-    }
-    existing.models = { ...existing.models, ...models }
-  } else {
-    config.provider[providerName] = {
-      npm: '@ai-sdk/openai-compatible',
-      name: providerName,
-      options: {
-        baseURL: baseUrl,
-        apiKey,
-      },
-      models,
-    }
   }
 }
 
