@@ -3,12 +3,15 @@
   "version": "0.11.0",
   "description": "OpenCode plugin for any LiteLLM proxy — auto-discovers models, auth, and capabilities",
   "type": "module",
+  "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/index.ts"
   },
   "files": [
-    "src"
+    "src",
+    "index.ts",
+    "dist"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
