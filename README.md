@@ -28,10 +28,11 @@ Environment variables take precedence over all other configuration. Use them to 
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LITELLM_URL` | Yes | Your LiteLLM proxy base URL |
-| `LITELLM_KEY` | Yes* | API key for the proxy |
-| `LITELLM_PROVIDER_ID` | No | Provider name in OpenCode (default: `LiteLLM`) |
-| `LITELLM_GCLOUD_TOKEN_AUTH` | No | Set to `1` to use Google ADC for auth — makes `LITELLM_KEY` optional |
+| `LITELLM_URL` | Yes | Your LiteLLM proxy base URL (or `LITELLM_PROVIDER_<NAME>_BASE_URL`) |
+| `LITELLM_KEY` | Yes* | API key for the proxy (or `LITELLM_PROVIDER_<NAME>_API_KEY`) |
+| `LITELLM_PROVIDER_ID` | No | Provider ID namespace in OpenCode (e.g. `protector`, default: `LiteLLM`). Also checks `LITELLM_PROVIDER_NAME` or `LITELLM_PROVIDER_<NAME>_NAME`. |
+| `LITELLM_DISPLAY_NAME` | No | Provider display name shown in OpenCode UI (e.g. `Protector`, default: provider ID). Also checks `LITELLM_PROVIDER_<NAME>_DISPLAY_NAME`. |
+| `LITELLM_GCLOUD_TOKEN_AUTH` | No | Set to `1` or `true` to use Google ADC for auth — makes `LITELLM_KEY` optional (also supports `LITELLM_PROVIDER_<NAME>_USE_GCLOUD_AUTH`) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | Path to a Google ADC JSON file (used when `LITELLM_GCLOUD_TOKEN_AUTH=1`) |
 
 *`LITELLM_KEY` is optional when `LITELLM_GCLOUD_TOKEN_AUTH=1`.
@@ -50,7 +51,9 @@ In OpenCode v2, plugins are specified under the `plugins` array:
       "package": "opencode-provider-litellm",
       "options": {
         "url": "https://your-litellm-proxy.example.com",  // LITELLM_URL
-        "apiKey": "sk-..."                                // LITELLM_KEY (optional if gcloud ADC is used)
+        "apiKey": "sk-...",                               // LITELLM_KEY (optional if gcloud ADC is used)
+        "id": "protector",                                // Custom provider ID namespace (e.g. protector/<model>)
+        "displayName": "Protector"                        // Custom provider UI label
       }
     }
   ]

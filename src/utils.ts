@@ -99,12 +99,93 @@ export function resolvePluginConfig(rawConfig: unknown): PluginConfig | null {
 }
 
 /**
- * Gets the provider ID from environment variable or defaults to "LiteLLM".
+ * Scans environment variables for any matching LITELLM_PROVIDER_<TOKEN>_<SUFFIX>
  */
-export function getProviderId(): string {
-  return (
-    (typeof process !== 'undefined'
-      ? process.env.LITELLM_PROVIDER_ID || process.env.LITELLM_PROVIDER_PROTECTOR_NAME
-      : undefined) || 'LiteLLM'
-  )
+function findProviderEnvVar(suffix: string): string | undefined {
+  if (typeof process === 'undefined' || !process.env) return undefined
+  const regex = new RegExp(`^LITELLM_PROVIDER_([A-Z0-9_]+?)_${suffix}$`)
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val && val.trim().length > 0 && regex.test(key)) {
+      return val.trim()
+    }
+  }
+  return undefined
+}
+
+/**
+ * Gets the provider ID from options or environment variables, defaulting to "LiteLLM".
+ *
+ * Priority:
+ * 1. options.id / options.providerId
+ * 2. options.name (if no explicit id)
+ * 3. LITELLM_PROVIDER_ID / LITELLM_PROVIDER_NAME
+ * 4. LITELLM_PROVIDER_<TOKEN>_NAME (e.g. LITELLM_PROVIDER_PROTECTOR_NAME)
+ * 5. Default: "LiteLLM"
+ */
+export function getProviderId(options?: unknown): string {
+  if (options && typeof options === 'object' && !Array.isArray(options)) {
+    const obj = options as Record<string, unknown>
+    if (typeof obj.id === 'string' && obj.id.trim().length > 0) {
+      return obj.id.trim()
+    }
+    if (typeof obj.providerId === 'string' && obj.providerId.trim().length > 0) {
+      return obj.providerId.trim()
+    }
+    if (typeof obj.name === 'string' && obj.name.trim().length > 0) {
+      return obj.name.trim()
+    }
+  }
+
+  if (typeof process !== 'undefined') {
+    if (process.env.LITELLM_PROVIDER_ID && process.env.LITELLM_PROVIDER_ID.trim().length > 0) {
+      return process.env.LITELLM_PROVIDER_ID.trim()
+    }
+    if (process.env.LITELLM_PROVIDER_NAME && process.env.LITELLM_PROVIDER_NAME.trim().length > 0) {
+      return process.env.LITELLM_PROVIDER_NAME.trim()
+    }
+    const envTokenName = findProviderEnvVar('NAME')
+    if (envTokenName) {
+      return envTokenName
+    }
+  }
+
+  return 'LiteLLM'
+}
+
+/**
+ * Gets the provider display name from options or environment variables.
+ *
+ * Priority:
+ * 1. options.displayName
+ * 2. LITELLM_DISPLAY_NAME
+ * 3. LITELLM_PROVIDER_<TOKEN>_DISPLAY_NAME (e.g. LITELLM_PROVIDER_PROTECTOR_DISPLAY_NAME)
+ * 4. options.name (when options.id was also set)
+ * 5. providerId fallback
+ */
+export function getProviderDisplayName(options?: unknown, fallbackId?: string): string {
+  if (options && typeof options === 'object' && !Array.isArray(options)) {
+    const obj = options as Record<string, unknown>
+    if (typeof obj.displayName === 'string' && obj.displayName.trim().length > 0) {
+      return obj.displayName.trim()
+    }
+    if (typeof obj.id === 'string' && typeof obj.name === 'string' && obj.name.trim().length > 0) {
+      return obj.name.trim()
+    }
+  }
+
+  if (typeof process !== 'undefined') {
+    if (process.env.LITELLM_DISPLAY_NAME && process.env.LITELLM_DISPLAY_NAME.trim().length > 0) {
+      return process.env.LITELLM_DISPLAY_NAME.trim()
+    }
+    const envTokenDisplayName = findProviderEnvVar('DISPLAY_NAME')
+    if (envTokenDisplayName) {
+      return envTokenDisplayName
+    }
+  }
+
+  if (fallbackId && fallbackId.toLowerCase() !== 'litellm') {
+    return fallbackId
+  }
+
+  return 'LiteLLM'
 }

@@ -1,6 +1,6 @@
 import { Plugin } from '@opencode/plugin'
 import { Provider, Model } from '@opencode/schema'
-import { resolvePluginConfig, getProviderId } from './utils.js'
+import { resolvePluginConfig, getProviderId, getProviderDisplayName } from './utils.js'
 import { discoverModels, buildProviderInfo, buildModelInfo } from './discovery.js'
 import { buildMcpToolDefinitions } from './mcp-tools.js'
 import { getGcloudToken } from './gcloud-token.js'
@@ -47,7 +47,8 @@ export const LiteLLMPlugin = Plugin.define({
       )
     }
 
-    const providerId = getProviderId()
+    const providerId = getProviderId(ctx.options)
+    const providerDisplayName = getProviderDisplayName(ctx.options, providerId)
     const providerID = Provider.ID.make(providerId)
 
     const getToken = async (): Promise<string> => {
@@ -58,7 +59,7 @@ export const LiteLLMPlugin = Plugin.define({
     }
 
     const source = {
-      info: buildProviderInfo(providerId, pluginConfig.url, pluginConfig.apiKey),
+      info: buildProviderInfo(providerId, pluginConfig.url, pluginConfig.apiKey, providerDisplayName),
       models: [] as Model.Info[],
     }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mapLiteLLMModel, resolvePluginConfig, getProviderId } from './utils.js'
+import { mapLiteLLMModel, resolvePluginConfig, getProviderId, getProviderDisplayName } from './utils.js'
 import type { LiteLLMModel } from './types.js'
 
 describe('mapLiteLLMModel', () => {
@@ -224,14 +224,61 @@ describe('resolvePluginConfig', () => {
       expect(getProviderId()).toBe('LiteLLM')
     })
 
+    it('prefers options.id over env vars', () => {
+      process.env.LITELLM_PROVIDER_ID = 'env-id'
+      expect(getProviderId({ id: 'custom-opt-id' })).toBe('custom-opt-id')
+    })
+
+    it('prefers options.providerId when options.id is not set', () => {
+      expect(getProviderId({ providerId: 'my-provider' })).toBe('my-provider')
+    })
+
+    it('prefers options.name when neither id nor providerId is set', () => {
+      expect(getProviderId({ name: 'company-ai' })).toBe('company-ai')
+    })
+
     it('reads LITELLM_PROVIDER_ID when set', () => {
       process.env.LITELLM_PROVIDER_ID = 'custom-id'
       expect(getProviderId()).toBe('custom-id')
     })
 
+    it('reads LITELLM_PROVIDER_NAME when set', () => {
+      process.env.LITELLM_PROVIDER_NAME = 'name-id'
+      expect(getProviderId()).toBe('name-id')
+    })
+
     it('falls back to LITELLM_PROVIDER_PROTECTOR_NAME when set', () => {
       process.env.LITELLM_PROVIDER_PROTECTOR_NAME = 'protector'
       expect(getProviderId()).toBe('protector')
+    })
+  })
+
+  describe('getProviderDisplayName', () => {
+    beforeEach(() => {
+      clearAllEnv()
+    })
+
+    it('defaults to LiteLLM', () => {
+      expect(getProviderDisplayName()).toBe('LiteLLM')
+    })
+
+    it('uses fallbackId when not litellm', () => {
+      expect(getProviderDisplayName(undefined, 'protector')).toBe('protector')
+    })
+
+    it('prefers options.displayName', () => {
+      process.env.LITELLM_DISPLAY_NAME = 'Env Name'
+      expect(getProviderDisplayName({ displayName: 'Custom Display' })).toBe('Custom Display')
+    })
+
+    it('reads LITELLM_DISPLAY_NAME when set', () => {
+      process.env.LITELLM_DISPLAY_NAME = 'Custom Gateway'
+      expect(getProviderDisplayName()).toBe('Custom Gateway')
+    })
+
+    it('reads LITELLM_PROVIDER_PROTECTOR_DISPLAY_NAME when set', () => {
+      process.env.LITELLM_PROVIDER_PROTECTOR_DISPLAY_NAME = 'Protector AI Gateway'
+      expect(getProviderDisplayName()).toBe('Protector AI Gateway')
     })
   })
 })

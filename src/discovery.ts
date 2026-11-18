@@ -214,10 +214,11 @@ export function buildProviderInfo(
   providerId: string,
   url: string,
   apiKey?: string,
+  displayName?: string,
 ): Provider.Info {
   return {
     ...Provider.Info.empty(Provider.ID.make(providerId)),
-    name: 'LiteLLM',
+    name: displayName || (providerId.toLowerCase() === 'litellm' ? 'LiteLLM' : providerId),
     activation: 'enabled',
     package: '@opencode/ai/providers/openai-compatible',
     settings: {
@@ -283,10 +284,11 @@ export function buildProviderRecord(
   url: string,
   apiKey: string | undefined,
   models: Record<string, OpencodeModelConfig>,
+  displayName?: string,
 ): { info: Provider.Info; models: Model.Info[] } {
   const providerID = Provider.ID.make(providerId)
   return {
-    info: buildProviderInfo(providerId, url, apiKey),
+    info: buildProviderInfo(providerId, url, apiKey, displayName),
     models: Object.entries(models).map(([id, config]) =>
       buildModelInfo(providerID, id, config),
     ),

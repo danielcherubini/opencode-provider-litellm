@@ -207,6 +207,20 @@ describe('buildProviderInfo', () => {
       baseURL: 'https://litellm.example.com',
     })
   })
+
+  it('uses custom displayName when provided', () => {
+    const info = buildProviderInfo('protector', 'https://llm.example.com', undefined, 'Protector AI')
+
+    expect(info.id).toBe('protector')
+    expect(info.name).toBe('Protector AI')
+  })
+
+  it('falls back to non-litellm providerId as name when displayName is omitted', () => {
+    const info = buildProviderInfo('protector', 'https://llm.example.com')
+
+    expect(info.id).toBe('protector')
+    expect(info.name).toBe('protector')
+  })
 })
 
 describe('buildModelInfo', () => {
@@ -344,5 +358,17 @@ describe('buildProviderRecord', () => {
     expect(record.models.map((m) => m.id)).toEqual(['gpt-4', 'claude-3'])
     expect(record.models[0].limit.context).toBe(8192)
     expect(record.models[1].limit.context).toBe(200000)
+  })
+
+  it('passes displayName to provider info', () => {
+    const record = buildProviderRecord(
+      'protector',
+      'https://litellm.example.com',
+      'key-123',
+      {},
+      'Protector Gateway',
+    )
+    expect(record.info.id).toBe('protector')
+    expect(record.info.name).toBe('Protector Gateway')
   })
 })

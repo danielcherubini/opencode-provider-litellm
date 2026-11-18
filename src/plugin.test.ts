@@ -4,9 +4,9 @@ import type { OpencodeModelConfig } from './types.js'
 // Mock the discovery module
 vi.mock('./discovery.js', () => ({
   discoverModels: vi.fn(),
-  buildProviderInfo: vi.fn((id, url, apiKey) => ({
+  buildProviderInfo: vi.fn((id, url, apiKey, displayName) => ({
     id,
-    name: 'LiteLLM',
+    name: displayName ?? 'LiteLLM',
     activation: 'enabled',
     package: '@opencode/ai/providers/openai-compatible',
     settings: { baseURL: url, ...(apiKey ? { apiKey } : {}) },
@@ -22,6 +22,7 @@ vi.mock('./discovery.js', () => ({
 vi.mock('./utils.js', () => ({
   resolvePluginConfig: vi.fn(),
   getProviderId: vi.fn(() => 'litellm'),
+  getProviderDisplayName: vi.fn(() => 'LiteLLM'),
 }))
 
 // Mock the MCP tools module
