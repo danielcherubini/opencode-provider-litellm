@@ -148,6 +148,8 @@ async function main(): Promise<void> {
   fs.mkdirSync(posTmpDir, { recursive: true })
   fs.mkdirSync(negTmpDir, { recursive: true })
 
+  const activeServers: Array<{ stop: () => Promise<void> }> = []
+
   try {
     // Clean conflicting environment variables
     const cleanEnv: NodeJS.ProcessEnv = { ...process.env }
@@ -187,37 +189,45 @@ async function main(): Promise<void> {
 
     const posPort = mockServer.port + 1
     const posServer = await runTestServer(opencodeBin, posTmpDir, posPort, posEnv)
+    activeServers.push(posServer)
 
-    console.log(`[verify-v2] Querying models from server on port ${posPort}...`)
-    const posClientEnv = { ...posEnv, OPENCODE_PASSWORD: posServer.password }
-    const posOutput = execSync(`${opencodeBin} models --server http://127.0.0.1:${posPort}`, {
-      cwd: posTmpDir,
-      env: posClientEnv,
-      encoding: 'utf8',
-    })
+    try {
+      console.log(`[verify-v2] Querying models from server on port ${posPort}...`)
+      const posClientEnv = { ...posEnv, OPENCODE_PASSWORD: posServer.password }
+      const posOutput = execSync(`${opencodeBin} models --server http://127.0.0.1:${posPort}`, {
+        cwd: posTmpDir,
+        env: posClientEnv,
+        encoding: 'utf8',
+      })
 
-    const posServerLogs = posServer.logs()
-    await posServer.stop()
+      const posServerLogs = posServer.logs()
 
-    console.log('[verify-v2] Positive assertion checks:')
-    // Check for error reference
-    const hasErrRef = /Reference:\s*err_d8486dea/i.test(posOutput) || /Reference:\s*err_d8486dea/i.test(posServerLogs)
-    if (hasErrRef) {
-      throw new Error('FAILURE: Found Reference: err_d8486dea in output or server logs!')
+      console.log('[verify-v2] Positive assertion checks:')
+      // Check for error reference
+      const hasErrRef = /Reference:\s*err_d8486dea/i.test(posOutput) || /Reference:\s*err_d8486dea/i.test(posServerLogs)
+      if (hasErrRef) {
+        throw new Error('FAILURE: Found Reference: err_d8486dea in output or server logs!')
+      }
+      console.log('  ✓ No err_d8486dea error reference detected')
+
+      const hasPluginLoadFail = /Plugin failed to load/i.test(posServerLogs)
+      if (hasPluginLoadFail) {
+        throw new Error('FAILURE: Found "Plugin failed to load" in server logs!')
+      }
+      console.log('  ✓ No "Plugin failed to load" error in server logs')
+
+      const hasTestModel = /litellm\/test-v2-model/i.test(posOutput)
+      if (!hasTestModel) {
+        throw new Error(`FAILURE: test-v2-model was not found in models output!\nOutput was:\n${posOutput}`)
+      }
+      console.log(`  ✓ Discovered model appears in output: ${posOutput.split('\n').find((l) => /test-v2-model/i.test(l))}`)
+    } finally {
+      await posServer.stop()
+      const idx = activeServers.indexOf(posServer)
+      if (idx !== -1) {
+        activeServers.splice(idx, 1)
+      }
     }
-    console.log('  ✓ No err_d8486dea error reference detected')
-
-    const hasPluginLoadFail = /Plugin failed to load/i.test(posServerLogs)
-    if (hasPluginLoadFail) {
-      throw new Error('FAILURE: Found "Plugin failed to load" in server logs!')
-    }
-    console.log('  ✓ No "Plugin failed to load" error in server logs')
-
-    const hasTestModel = /litellm\/test-v2-model/i.test(posOutput)
-    if (!hasTestModel) {
-      throw new Error(`FAILURE: test-v2-model was not found in models output!\nOutput was:\n${posOutput}`)
-    }
-    console.log(`  ✓ Discovered model appears in output: ${posOutput.split('\n').find((l) => /test-v2-model/i.test(l))}`)
 
     // --- NEGATIVE CONTROL: without plugin ---
     console.log('\n[verify-v2] === Running Negative Control (without plugin) ===')
@@ -240,24 +250,39 @@ async function main(): Promise<void> {
 
     const negPort = mockServer.port + 2
     const negServer = await runTestServer(opencodeBin, negTmpDir, negPort, negEnv)
+    activeServers.push(negServer)
 
-    const negClientEnv = { ...negEnv, OPENCODE_PASSWORD: negServer.password }
-    const negOutput = execSync(`${opencodeBin} models --server http://127.0.0.1:${negPort}`, {
-      cwd: negTmpDir,
-      env: negClientEnv,
-      encoding: 'utf8',
-    })
-    await negServer.stop()
+    try {
+      const negClientEnv = { ...negEnv, OPENCODE_PASSWORD: negServer.password }
+      const negOutput = execSync(`${opencodeBin} models --server http://127.0.0.1:${negPort}`, {
+        cwd: negTmpDir,
+        env: negClientEnv,
+        encoding: 'utf8',
+      })
 
-    console.log('[verify-v2] Negative control checks:')
-    const negHasTestModel = /test-v2-model/i.test(negOutput)
-    if (negHasTestModel) {
-      throw new Error('FAILURE: test-v2-model unexpectedly appeared in negative control output!')
+      console.log('[verify-v2] Negative control checks:')
+      const negHasTestModel = /test-v2-model/i.test(negOutput)
+      if (negHasTestModel) {
+        throw new Error('FAILURE: test-v2-model unexpectedly appeared in negative control output!')
+      }
+      console.log('  ✓ Model test-v2-model correctly absent when plugin is not configured')
+    } finally {
+      await negServer.stop()
+      const idx = activeServers.indexOf(negServer)
+      if (idx !== -1) {
+        activeServers.splice(idx, 1)
+      }
     }
-    console.log('  ✓ Model test-v2-model correctly absent when plugin is not configured')
 
     console.log('\n[verify-v2] All end-to-end OpenCode v2 verification checks passed successfully!')
   } finally {
+    for (const server of [...activeServers]) {
+      try {
+        await server.stop()
+      } catch (err) {
+        console.error('[verify-v2] Error stopping active server:', err)
+      }
+    }
     await mockServer.close()
     fs.rmSync(baseTmpDir, { recursive: true, force: true })
     console.log('[verify-v2] Cleaned up temporary directories and stopped mock server.')
