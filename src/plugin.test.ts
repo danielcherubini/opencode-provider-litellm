@@ -1,23 +1,32 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
-import type { PluginInput } from '@opencode-ai/plugin'
 import type { OpencodeModelConfig } from './types.js'
 
 // Mock the discovery module
 vi.mock('./discovery.js', () => ({
   discoverModels: vi.fn(),
-  injectModelsIntoConfig: vi.fn(),
+  buildProviderInfo: vi.fn((id, url, apiKey) => ({
+    id,
+    name: 'LiteLLM',
+    activation: 'enabled',
+    package: '@opencode/ai/providers/openai-compatible',
+    settings: { baseURL: url, ...(apiKey ? { apiKey } : {}) },
+  })),
+  buildModelInfo: vi.fn((providerID, id, m) => ({
+    id,
+    providerID,
+    name: m.name ?? id,
+  })),
 }))
 
 // Mock the utils module
 vi.mock('./utils.js', () => ({
   resolvePluginConfig: vi.fn(),
   getProviderId: vi.fn(() => 'litellm'),
-  mapLiteLLMModel: vi.fn(),
 }))
 
 // Mock the MCP tools module
 vi.mock('./mcp-tools.js', () => ({
-  createMcpToolDefinitions: vi.fn(),
+  buildMcpToolDefinitions: vi.fn(),
 }))
 
 // Mock the gcloud token module
@@ -26,44 +35,82 @@ vi.mock('./gcloud-token.js', () => ({
   resetTokenCache: vi.fn(),
 }))
 
-// Mock the model cache module — no cache by default
+// Mock the model cache module
 vi.mock('./model-cache.js', () => ({
   loadModelCache: vi.fn().mockReturnValue(null),
   saveModelCache: vi.fn(),
 }))
 
 import { LiteLLMPlugin } from './plugin.js'
-import { discoverModels, injectModelsIntoConfig } from './discovery.js'
+import { discoverModels, buildProviderInfo, buildModelInfo } from './discovery.js'
 import { resolvePluginConfig } from './utils.js'
-import { createMcpToolDefinitions } from './mcp-tools.js'
+import { buildMcpToolDefinitions } from './mcp-tools.js'
+import { loadModelCache, saveModelCache } from './model-cache.js'
+import { getGcloudToken } from './gcloud-token.js'
 
-function createMockInput(): PluginInput {
-  const logFn = vi.fn().mockResolvedValue(true)
-  return {
-    client: {
-      app: { log: logFn },
-    } as never,
-    $: vi.fn() as never,
-    project: {} as never,
-    directory: '/test',
-    worktree: '/test',
-    serverUrl: new URL('http://localhost'),
-    experimental_workspace: {
-      register: vi.fn(),
+function createMockContext(options?: Record<string, unknown>) {
+  const providerEditor = {
+    add: vi.fn(),
+    list: vi.fn(),
+    get: vi.fn(),
+    update: vi.fn(),
+    remove: vi.fn(),
+    models: {
+      set: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
     },
   }
+  const toolEditor = {
+    add: vi.fn(),
+    list: vi.fn(),
+    get: vi.fn(),
+    update: vi.fn(),
+    remove: vi.fn(),
+    namespace: vi.fn(),
+  }
+  const hooks = new Map<string, { callback: Function; options?: unknown }>()
+
+  const ctx = {
+    options: options ?? {},
+    provider: {
+      transform: vi.fn(async (cb: (editor: typeof providerEditor) => void) => {
+        cb(providerEditor)
+        return { dispose: vi.fn() }
+      }),
+      reload: vi.fn().mockResolvedValue(undefined),
+    },
+    tool: {
+      transform: vi.fn(async (cb: (editor: typeof toolEditor) => void) => {
+        cb(toolEditor)
+        return { dispose: vi.fn() }
+      }),
+    },
+    session: {
+      hook: vi.fn(async (name: string, callback: Function, hookOptions?: unknown) => {
+        hooks.set(name, { callback, options: hookOptions })
+        return { dispose: vi.fn() }
+      }),
+    },
+    _providerEditor: providerEditor,
+    _toolEditor: toolEditor,
+    _hooks: hooks,
+  }
+
+  return ctx
 }
 
-describe('LiteLLMPlugin', () => {
-  let mockInput: PluginInput
-  let logFn: ReturnType<typeof vi.fn>
+describe('LiteLLMPlugin (OpenCode v2)', () => {
+  let mockCtx: ReturnType<typeof createMockContext>
 
   beforeEach(() => {
     vi.resetAllMocks()
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
 
-    mockInput = createMockInput()
-    logFn = mockInput.client.app.log as ReturnType<typeof vi.fn>
+    mockCtx = createMockContext({
+      url: 'https://litellm.example.com',
+      apiKey: 'test-api-key',
+    })
 
     const models: Record<string, OpencodeModelConfig> = {
       'gpt-4': {
@@ -74,390 +121,317 @@ describe('LiteLLMPlugin', () => {
         modalities: { input: ['text'], output: ['text'] },
       },
     }
-    vi.mocked(discoverModels).mockResolvedValue(models)
-    vi.mocked(injectModelsIntoConfig).mockImplementation(() => {})
+    vi.mocked(discoverModels).mockReturnValue(new Promise(() => {}))
     vi.mocked(resolvePluginConfig).mockReturnValue({
       url: 'https://litellm.example.com',
       apiKey: 'test-api-key',
     })
-
-    // Default MCP mock: returns one tool
-    vi.mocked(createMcpToolDefinitions).mockResolvedValue({
-      mcp_test_server_test_tool: 'mock-mcp-tool',
-    })
+    vi.mocked(loadModelCache).mockReturnValue(null)
+    vi.mocked(buildMcpToolDefinitions).mockResolvedValue([
+      {
+        name: 'mcp_brave_search',
+        description: 'Search',
+        input: { type: 'object', properties: {} },
+        execute: vi.fn().mockResolvedValue({ content: 'result' }),
+      },
+    ])
   })
 
   afterEach(() => {
     delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
   })
 
-  it('throws on missing config', async () => {
-    vi.mocked(resolvePluginConfig).mockReturnValue(null)
-
-    await expect(
-      LiteLLMPlugin(mockInput, {})
-    ).rejects.toThrow(
-      "Plugin config error: set 'url' and 'apiKey'",
-    )
+  it('defines plugin with id "litellm"', () => {
+    expect(LiteLLMPlugin.id).toBe('litellm')
+    expect(typeof LiteLLMPlugin.setup).toBe('function')
   })
 
-  it('throws gcloud-specific error when LITELLM_GCLOUD_TOKEN_AUTH is set but config is missing', async () => {
-    vi.mocked(resolvePluginConfig).mockReturnValue(null)
-    process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+  describe('configuration errors', () => {
+    it('throws when config is null', async () => {
+      vi.mocked(resolvePluginConfig).mockReturnValue(null)
 
-    await expect(
-      LiteLLMPlugin(mockInput, {})
-    ).rejects.toThrow(
-      'LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1',
-    )
-  })
-
-  it('throws generic error when LITELLM_GCLOUD_TOKEN_AUTH is not set and config is missing', async () => {
-    vi.mocked(resolvePluginConfig).mockReturnValue(null)
-    delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-
-    await expect(
-      LiteLLMPlugin(mockInput, {})
-    ).rejects.toThrow(
-      "Plugin config error: set 'url' and 'apiKey'",
-    )
-  })
-
-  it('config hook calls discoverModels and injects models into config', async () => {
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
+      await expect(
+        LiteLLMPlugin.setup(mockCtx as any),
+      ).rejects.toThrow("Plugin config error: set 'url' and 'apiKey'")
     })
 
-    const testConfig = {} as never
-    await hooks.config?.(testConfig)
-
-    expect(discoverModels).toHaveBeenCalledWith(
-      { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
-      expect.any(Function),
-    )
-    expect(injectModelsIntoConfig).toHaveBeenCalledWith(
-      testConfig,
-      'litellm',
-      'https://litellm.example.com',
-      'test-api-key',
-      expect.any(Object),
-    )
-    expect(logFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          service: 'litellm',
-          level: 'info',
-          message: expect.stringContaining('Discovered'),
-        }),
-      }),
-    )
-  })
-
-  it('config hook catches errors and does not throw', async () => {
-    vi.mocked(discoverModels).mockRejectedValue(new Error('Network error'))
-
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    await expect(hooks.config?.({} as never)).resolves.not.toThrow()
-
-    expect(logFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          service: 'litellm',
-          level: 'warn',
-          message: expect.stringContaining('Model discovery failed'),
-        }),
-      }),
-    )
-  })
-
-  it('config hook logs warning and skips inject when no models discovered', async () => {
-    vi.mocked(discoverModels).mockResolvedValue({})
-
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    await hooks.config?.({} as never)
-
-    expect(injectModelsIntoConfig).not.toHaveBeenCalled()
-    expect(logFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          service: 'litellm',
-          level: 'warn',
-          message: 'No models discovered',
-        }),
-      }),
-    )
-  })
-
-  it('auth hook returns success when API key is provided', async () => {
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    const result = await hooks.auth?.methods[0].authorize?.({ apiKey: 'user-pasted-key' })
-
-    expect(result).toEqual({ type: 'success', key: 'user-pasted-key' })
-  })
-
-  it('auth hook returns failed when API key is empty', async () => {
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    const result = await hooks.auth?.methods[0].authorize?.({ apiKey: '' })
-    expect(result).toEqual({ type: 'failed' })
-  })
-
-  it('auth hook returns failed when no inputs provided', async () => {
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    const result = await hooks.auth?.methods[0].authorize?.()
-    expect(result).toEqual({ type: 'failed' })
-  })
-
-  it('tool hook returns merged MCP + Skills tools', async () => {
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    expect(hooks.tool).toBeDefined()
-    expect(hooks.tool).toHaveProperty('mcp_test_server_test_tool')
-  })
-
-  it('tool hook passes correct config and apiKey to createMcpToolDefinitions', async () => {
-    await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    expect(createMcpToolDefinitions).toHaveBeenCalledWith(
-      { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
-      'test-api-key',
-    )
-  })
-
-  it('MCP discovery failure does not break the plugin', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.mocked(createMcpToolDefinitions).mockRejectedValue(new Error('MCP server unavailable'))
-
-    const hooks = await LiteLLMPlugin(mockInput, {
-      url: 'https://litellm.example.com',
-      apiKey: 'test-api-key',
-    })
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[opencode-provider-litellm] MCP tool discovery failed: Error: MCP server unavailable',
-    )
-
-    // Skills tools should still be present
-    expect(hooks.tool).toBeDefined()
-    // MCP tools should not be present (empty object merged)
-    expect(hooks.tool).not.toHaveProperty('mcp_test_server_test_tool')
-
-    warnSpy.mockRestore()
-  })
-
-  it('plugin works with env vars (no inline config)', async () => {
-    process.env.LITELLM_URL = 'https://env.litellm.example.com'
-    process.env.LITELLM_KEY = 'env-api-key'
-
-    vi.mocked(resolvePluginConfig).mockReturnValue({
-      url: 'https://env.litellm.example.com',
-      apiKey: 'env-api-key',
-    })
-
-    const hooks = await LiteLLMPlugin(mockInput, undefined)
-
-    expect(hooks.tool).toBeDefined()
-    expect(createMcpToolDefinitions).toHaveBeenCalledWith(
-      { url: 'https://env.litellm.example.com', apiKey: 'env-api-key' },
-      'env-api-key',
-    )
-
-    delete process.env.LITELLM_URL
-    delete process.env.LITELLM_KEY
-  })
-
-  describe('chat.headers', () => {
-    it('always registers chat.headers hook', async () => {
-      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
-
-      expect(hooks['chat.headers']).toBeDefined()
-      expect(typeof hooks['chat.headers']).toBe('function')
-    })
-
-    it('injects session ID header', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
-
-      const output = { headers: {} as Record<string, string> }
-      await (hooks['chat.headers'] as Function)(
-        { sessionID: 'test-session-123' },
-        output,
-      )
-      expect(output.headers['X-Litellm-Session-ID']).toBe('test-session-123')
-    })
-
-    it('skips session ID header when sessionID is empty', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
-
-      const output = { headers: {} as Record<string, string> }
-      await (hooks['chat.headers'] as Function)(
-        { sessionID: '' },
-        output,
-      )
-      expect(output.headers['X-Litellm-Session-ID']).toBeUndefined()
-    })
-
-    it('injects gcloud token when LITELLM_GCLOUD_TOKEN_AUTH is set', async () => {
+    it('throws gcloud-specific error when LITELLM_GCLOUD_TOKEN_AUTH is set and config is null', async () => {
+      vi.mocked(resolvePluginConfig).mockReturnValue(null)
       process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
 
-      const { getGcloudToken } = await import('./gcloud-token.js')
-      vi.mocked(getGcloudToken).mockResolvedValue('mock-gcloud-token')
-
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
-
-      const output = { headers: {} as Record<string, string> }
-      await (hooks['chat.headers'] as Function)(
-        { sessionID: 'test-session-123' },
-        output,
-      )
-      expect(output.headers['Authorization']).toBe('Bearer mock-gcloud-token')
-      expect(output.headers['X-Litellm-Session-ID']).toBe('test-session-123')
-    })
-
-    it('does not inject gcloud token when LITELLM_GCLOUD_TOKEN_AUTH is unset', async () => {
-      delete process.env.LITELLM_GCLOUD_TOKEN_AUTH
-
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
-
-      const output = { headers: {} as Record<string, string> }
-      await (hooks['chat.headers'] as Function)(
-        { sessionID: 'test-session-123' },
-        output,
-      )
-      expect(output.headers['Authorization']).toBeUndefined()
-      expect(output.headers['X-Litellm-Session-ID']).toBe('test-session-123')
+      await expect(
+        LiteLLMPlugin.setup(mockCtx as any),
+      ).rejects.toThrow('LITELLM_KEY is optional when LITELLM_GCLOUD_TOKEN_AUTH=1')
     })
   })
 
-  describe('chat.params thinking normalization', () => {
-    it('normalizes thinking string "enabled" to adaptive', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
+  describe('setup lifecycle', () => {
+    it('registers provider synchronously via ctx.provider.transform', async () => {
+      await LiteLLMPlugin.setup(mockCtx as any)
 
-      const output = { options: { thinking: 'enabled' } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'adaptive' })
+      expect(ctxTransformCalled(mockCtx.provider.transform)).toBe(true)
+      expect(mockCtx._providerEditor.add).toHaveBeenCalledTimes(1)
+      const added = mockCtx._providerEditor.add.mock.calls[0][0]
+      expect(added.info).toEqual(expect.objectContaining({ id: 'litellm' }))
+      expect(added.models).toEqual([])
     })
 
-    it('normalizes thinking string "disabled" to disabled', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
+    it('preloads cached models into source.models', async () => {
+      const cached: Record<string, OpencodeModelConfig> = {
+        'cached-model': {
+          name: 'cached-model',
+          tool_call: true,
+          reasoning: false,
+          limit: { context: 4096, output: 4096 },
+        },
+      }
+      vi.mocked(loadModelCache).mockReturnValue(cached)
 
-      const output = { options: { thinking: 'disabled' } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'disabled' })
+      await LiteLLMPlugin.setup(mockCtx as any)
+
+      expect(loadModelCache).toHaveBeenCalledWith('litellm')
+      expect(buildModelInfo).toHaveBeenCalledWith('litellm', 'cached-model', cached['cached-model'])
+      const added = mockCtx._providerEditor.add.mock.calls[0][0]
+      expect(added.models).toHaveLength(1)
+      expect(added.models[0].id).toBe('cached-model')
     })
 
-    it('normalizes thinking string "off" to disabled', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
+    it('triggers live model discovery and reloads provider on success', async () => {
+      let resolveDiscovery: (models: Record<string, OpencodeModelConfig>) => void
+      const discoveryPromise = new Promise<Record<string, OpencodeModelConfig>>((resolve) => {
+        resolveDiscovery = resolve
       })
+      vi.mocked(discoverModels).mockReturnValue(discoveryPromise)
 
-      const output = { options: { thinking: 'off' } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'disabled' })
+      await LiteLLMPlugin.setup(mockCtx as any)
+
+      expect(mockCtx.provider.reload).not.toHaveBeenCalled()
+
+      const discovered: Record<string, OpencodeModelConfig> = {
+        'discovered-1': {
+          name: 'discovered-1',
+          tool_call: true,
+          reasoning: false,
+          limit: { context: 16384, output: 4096 },
+        },
+      }
+      resolveDiscovery!(discovered)
+      await flushPromises()
+
+      expect(saveModelCache).toHaveBeenCalledWith('litellm', discovered)
+      expect(mockCtx.provider.reload).toHaveBeenCalledTimes(1)
+      const added = mockCtx._providerEditor.add.mock.calls[0][0]
+      expect(added.models).toHaveLength(1)
+      expect(added.models[0].id).toBe('discovered-1')
     })
 
-    it('normalizes thinking string "medium" to adaptive', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
+    it('catches discovery error without throwing', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(discoverModels).mockRejectedValue(new Error('Network failure'))
 
-      const output = { options: { thinking: 'medium' } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'adaptive' })
+      await LiteLLMPlugin.setup(mockCtx as any)
+      await flushPromises()
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[opencode-provider-litellm] Model discovery failed: Error: Network failure'),
+      )
+      warnSpy.mockRestore()
     })
 
-    it('normalizes thinking dict with non-standard type to adaptive', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
+    it('registers MCP tools via ctx.tool.transform', async () => {
+      const mockTools = [
+        {
+          name: 'mcp_test_search',
+          description: 'Search (via test MCP server)',
+          input: { type: 'object', properties: {} },
+          execute: vi.fn(),
+        },
+      ]
+      vi.mocked(buildMcpToolDefinitions).mockResolvedValue(mockTools)
 
-      const output = { options: { thinking: { type: 'medium', budget_tokens: 1000 } } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'adaptive', budget_tokens: 1000 })
+      await LiteLLMPlugin.setup(mockCtx as any)
+
+      expect(buildMcpToolDefinitions).toHaveBeenCalledWith(
+        { url: 'https://litellm.example.com', apiKey: 'test-api-key' },
+        expect.any(Function),
+      )
+      expect(mockCtx.tool.transform).toHaveBeenCalledTimes(1)
+      expect(mockCtx._toolEditor.add).toHaveBeenCalledWith(mockTools[0])
     })
 
-    it('leaves thinking dict with valid type untouched', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
+    it('handles MCP discovery failure gracefully', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(buildMcpToolDefinitions).mockRejectedValue(new Error('MCP server down'))
 
-      const output = { options: { thinking: { type: 'enabled', budget_tokens: 1000 } } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toEqual({ type: 'enabled', budget_tokens: 1000 })
+      await expect(LiteLLMPlugin.setup(mockCtx as any)).resolves.not.toThrow()
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[opencode-provider-litellm] MCP tool discovery failed: Error: MCP server down'),
+      )
+      warnSpy.mockRestore()
+    })
+  })
+
+  describe('session hooks', () => {
+    it('registers model.request hook with providerID scoping', async () => {
+      await LiteLLMPlugin.setup(mockCtx as any)
+
+      expect(mockCtx.session.hook).toHaveBeenCalledWith(
+        'model.request',
+        expect.any(Function),
+        { providerID: 'litellm' },
+      )
     })
 
-    it('leaves missing thinking untouched', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
-      })
+    it('registers thinking normalization hooks with providerID scoping', async () => {
+      await LiteLLMPlugin.setup(mockCtx as any)
 
-      const output = { options: {} as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toBeUndefined()
+      for (const hookName of ['context', 'compaction', 'generate', 'title']) {
+        expect(mockCtx.session.hook).toHaveBeenCalledWith(
+          hookName,
+          expect.any(Function),
+          { providerID: 'litellm' },
+        )
+      }
     })
 
-    it('leaves thinking null untouched', async () => {
-      const hooks = await LiteLLMPlugin(mockInput, {
-        url: 'https://litellm.example.com',
-        apiKey: 'test-api-key',
+    describe('model.request hook headers', () => {
+      it('sets static apiKey Authorization header when not gcloud auth', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('model.request')!
+        const event = { headers: {} as Record<string, string> }
+        await hook.callback(event)
+
+        expect(event.headers['Authorization']).toBe('Bearer test-api-key')
       })
 
-      const output = { options: { thinking: null } as Record<string, unknown> }
-      await (hooks['chat.params'] as Function)({}, output)
-      expect(output.options.thinking).toBeNull()
+      it('sets gcloud bearer token when LITELLM_GCLOUD_TOKEN_AUTH is set', async () => {
+        process.env.LITELLM_GCLOUD_TOKEN_AUTH = '1'
+        vi.mocked(getGcloudToken).mockResolvedValue('gcloud-oauth-token')
+
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('model.request')!
+        const event = { headers: {} as Record<string, string> }
+        await hook.callback(event)
+
+        expect(event.headers['Authorization']).toBe('Bearer gcloud-oauth-token')
+      })
+
+      it('sets X-Litellm-Session-ID header when sessionID is provided', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('model.request')!
+        const event = { headers: {} as Record<string, string>, sessionID: 'sess-123' }
+        await hook.callback(event)
+
+        expect(event.headers['X-Litellm-Session-ID']).toBe('sess-123')
+      })
+
+      it('does not set X-Litellm-Session-ID when sessionID is empty or undefined', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('model.request')!
+        const event = { headers: {} as Record<string, string> }
+        await hook.callback(event)
+
+        expect(event.headers['X-Litellm-Session-ID']).toBeUndefined()
+      })
+    })
+
+    describe('thinking param normalization', () => {
+      it('normalizes thinking string "enabled" to adaptive', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('context')!
+        const event = { options: { thinking: 'enabled' } as Record<string, unknown> }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toEqual({ type: 'adaptive' })
+      })
+
+      it('normalizes thinking string "disabled" to disabled', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('context')!
+        const event = { options: { thinking: 'disabled' } as Record<string, unknown> }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toEqual({ type: 'disabled' })
+      })
+
+      it('normalizes thinking string "off" to disabled', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('context')!
+        const event = { options: { thinking: 'off' } as Record<string, unknown> }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toEqual({ type: 'disabled' })
+      })
+
+      it('normalizes thinking string "medium" to adaptive', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('compaction')!
+        const event = { options: { thinking: 'medium' } as Record<string, unknown> }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toEqual({ type: 'adaptive' })
+      })
+
+      it('normalizes thinking dict with non-standard type to adaptive', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('generate')!
+        const event = {
+          options: { thinking: { type: 'medium', budget_tokens: 1000 } } as Record<string, unknown>,
+        }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toEqual({ type: 'adaptive', budget_tokens: 1000 })
+      })
+
+      it('leaves thinking dict with valid type untouched', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('title')!
+        const event = {
+          options: { thinking: { type: 'enabled', budget_tokens: 1000 } } as Record<string, unknown>,
+        }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toEqual({ type: 'enabled', budget_tokens: 1000 })
+      })
+
+      it('leaves missing thinking untouched', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('context')!
+        const event = { options: {} as Record<string, unknown> }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toBeUndefined()
+      })
+
+      it('leaves null thinking untouched', async () => {
+        await LiteLLMPlugin.setup(mockCtx as any)
+
+        const hook = mockCtx._hooks.get('context')!
+        const event = { options: { thinking: null } as Record<string, unknown> }
+        await hook.callback(event)
+
+        expect(event.options.thinking).toBeNull()
+      })
     })
   })
 })
+
+function ctxTransformCalled(mockFn: any): boolean {
+  return mockFn.mock.calls.length > 0
+}
+
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}

@@ -1,4 +1,3 @@
-import { tool } from '@opencode-ai/plugin'
 import type { PluginConfig, McpTool } from './types.js'
 
 /**
@@ -99,155 +98,62 @@ function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '_')
 }
 
-/**
- * Check if a JSON Schema property can be mapped to a zod type.
- * Returns true for: string, number, integer, boolean, array of strings.
- * Returns false for: nested objects, $ref, anyOf, etc.
- */
-function isMappableSchema(propSchema: unknown): boolean {
-  if (!propSchema || typeof propSchema !== 'object') return false
-
-  const schema = propSchema as Record<string, unknown>
-
-  // Reject if it has $ref or anyOf
-  if ('$ref' in schema || 'anyOf' in schema || 'oneOf' in schema || 'allOf' in schema) {
-    return false
-  }
-
-  const type = schema.type as string | undefined
-  if (!type) return false
-
-  if (type === 'string' || type === 'number' || type === 'integer' || type === 'boolean') {
-    return true
-  }
-
-  if (type === 'array') {
-    const items = schema.items as Record<string, unknown> | undefined
-    if (items && items.type === 'string') {
-      return true
-    }
-    return false
-  }
-
-  return false
+export interface McpToolDefinition {
+  name: string
+  description: string
+  input: Record<string, unknown>
+  execute: (input: unknown) => Promise<{ content: string }>
 }
 
 /**
- * Build zod args from a JSON Schema input_schema.
- * Returns null if the schema cannot be mapped (use single-arg fallback).
- */
-function buildZodArgs(inputSchema: Record<string, unknown>): Record<string, unknown> | null {
-  const properties = inputSchema.properties as Record<string, unknown> | undefined
-  const required = (inputSchema.required as string[] | undefined) ?? []
-
-  if (!properties || typeof properties !== 'object') {
-    return null
-  }
-
-  // Check if all properties are mappable
-  for (const key of Object.keys(properties)) {
-    if (!isMappableSchema(properties[key])) {
-      return null
-    }
-  }
-
-  const zodArgs: Record<string, unknown> = {}
-
-  for (const [key, propSchema] of Object.entries(properties)) {
-    const schema = propSchema as Record<string, unknown>
-    const type = schema.type as string | undefined
-    const isRequired = required.includes(key)
-
-    let zodField: unknown
-
-    switch (type) {
-      case 'string':
-        zodField = tool.schema.string().describe(key)
-        break
-      case 'number':
-      case 'integer':
-        zodField = tool.schema.number().describe(key)
-        break
-      case 'boolean':
-        zodField = tool.schema.boolean().describe(key)
-        break
-      case 'array': {
-        const items = schema.items as Record<string, unknown> | undefined
-        if (items && items.type === 'string') {
-          zodField = tool.schema.array(tool.schema.string()).describe(key)
-        } else {
-          return null
-        }
-        break
-      }
-      default:
-        return null
-    }
-
-    if (!isRequired) {
-      // @ts-expect-error — optional() is available on all zod types
-      zodField = zodField.optional()
-    }
-
-    zodArgs[key] = zodField
-  }
-
-  return zodArgs
-}
-
-/**
- * Creates opencode tool definitions for all discovered MCP tools.
+ * Builds OpenCode v2 tool definitions using JSON Schema for all discovered MCP tools.
  *
- * Each MCP tool is registered as `mcp_${serverName}_${toolName}` with
- * a description appended with the server name.
- *
- * Returns an empty object if no tools are discovered.
+ * Each MCP tool is registered with:
+ * - name: mcp_${sanitizeName(server_name)}_${sanitizeName(name)}
+ * - description: ${description || name} (via ${server_name} MCP server)
+ * - input: JSON Schema object
+ * - execute: returns { content: result }
  */
-export async function createMcpToolDefinitions(
+export async function buildMcpToolDefinitions(
   config: PluginConfig,
-  token: string,
-): Promise<Record<string, any>> {
+  getToken: () => Promise<string>,
+): Promise<McpToolDefinition[]> {
+  const token = await getToken()
   const mcpTools = await discoverMcpTools(config, token)
 
   if (mcpTools.length === 0) {
-    return {}
+    return []
   }
 
-  const definitions: Record<string, any> = {}
-
-  for (const mcpTool of mcpTools) {
+  return mcpTools.map((mcpTool) => {
     const serverName = mcpTool.server_name
     const toolName = mcpTool.name
-
     const safeServer = sanitizeName(serverName)
     const safeTool = sanitizeName(toolName)
-    const opencodeName = `mcp_${safeServer}_${safeTool}`
+    const name = `mcp_${safeServer}_${safeTool}`
+    const description = `${mcpTool.description || toolName} (via ${serverName} MCP server)`
+    const input =
+      mcpTool.input_schema && typeof mcpTool.input_schema === 'object'
+        ? mcpTool.input_schema
+        : { type: 'object', properties: {} }
 
-    const description = `${mcpTool.description} (via ${serverName} MCP server)`
-
-    // Build args from input_schema
-    const zodArgs = buildZodArgs(mcpTool.input_schema)
-
-    let args: Record<string, any>
-    if (zodArgs) {
-      args = zodArgs
-    } else {
-      // Fallback: single-arg mode
-      args = {
-        args: tool.schema
-          .record(tool.schema.string(), tool.schema.unknown())
-          .describe('Tool arguments as key-value pairs'),
-      }
-    }
-
-    definitions[opencodeName] = tool({
+    return {
+      name,
       description,
-      args: args as Parameters<typeof tool>[0]['args'],
-      async execute(args: Record<string, unknown>, _context: unknown): Promise<string> {
-        return executeMcpTool(config, token, serverName, toolName, args)
+      input,
+      execute: async (args: unknown) => {
+        const freshToken = await getToken()
+        const normalizedArgs =
+          args && typeof args === 'object' ? (args as Record<string, unknown>) : {}
+        const result = await executeMcpTool(
+          config,
+          freshToken,
+          serverName,
+          toolName,
+          normalizedArgs,
+        )
+        return { content: result }
       },
-    })
-  }
-
-  return definitions
+    }
+  })
 }

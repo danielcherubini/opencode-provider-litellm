@@ -1,5 +1,5 @@
 import type { PluginConfig, OpencodeModelConfig } from './types.js'
-import type { Config } from '@opencode-ai/plugin'
+import { Provider, Model } from '@opencode/schema'
 
 interface LiteLLMHealthModel {
   model: string
@@ -208,40 +208,87 @@ export async function discoverModels(
 }
 
 /**
- * Injects discovered models into an OpenCode config under the given provider name.
- * Merges with existing provider config without overwriting options.
+ * Builds a Provider.Info object conforming to OpenCode v2 schema.
  */
-export function injectModelsIntoConfig(
-  config: Config,
-  providerName: string,
-  baseUrl: string,
-  apiKey: string,
-  models: Record<string, OpencodeModelConfig>,
-): void {
-  if (!config.provider) {
-    config.provider = {}
+export function buildProviderInfo(
+  providerId: string,
+  url: string,
+  apiKey?: string,
+): Provider.Info {
+  return {
+    ...Provider.Info.empty(Provider.ID.make(providerId)),
+    name: 'LiteLLM',
+    activation: 'enabled',
+    package: '@opencode/ai/providers/openai-compatible',
+    settings: {
+      baseURL: url,
+      ...(apiKey ? { apiKey } : {}),
+    },
+  }
+}
+
+/**
+ * Builds a Model.Info object conforming to OpenCode v2 schema.
+ */
+export function buildModelInfo(
+  providerID: Provider.ID,
+  id: string,
+  config: OpencodeModelConfig,
+): Model.Info {
+  const base = Model.Info.default(providerID, Model.ID.make(id))
+
+  const cost: Array<Model.Info['cost'][number]> = []
+  if (config.cost) {
+    cost.push({
+      input: config.cost.input as any,
+      output: config.cost.output as any,
+      cache: {
+        read: (config.cost.cache_read ?? 0) as any,
+        write: (config.cost.cache_write ?? 0) as any,
+      },
+    })
+    if (config.cost.context_over_200k) {
+      cost.push({
+        tier: { type: 'context', size: 200000 },
+        input: config.cost.context_over_200k.input as any,
+        output: config.cost.context_over_200k.output as any,
+        cache: { read: 0 as any, write: 0 as any },
+      })
+    }
   }
 
-  const existing = config.provider[providerName]
+  return {
+    ...base,
+    name: config.name || id,
+    limit: {
+      ...base.limit,
+      context: Math.floor(config.limit?.context ?? 32768),
+      output: Math.floor(config.limit?.output ?? 4096),
+    },
+    capabilities: {
+      ...base.capabilities,
+      tools: config.tool_call !== false,
+      input: (config.modalities?.input || ['text']) as any,
+      output: (config.modalities?.output || ['text']) as any,
+    },
+    cost,
+  }
+}
 
-  if (existing) {
-    // Preserve existing options, merge models
-    // Set defaults for incomplete provider entries
-    if (!existing.npm) existing.npm = '@ai-sdk/openai-compatible'
-    if (!existing.name) existing.name = providerName
-    if (!existing.options) {
-      existing.options = { baseURL: baseUrl, apiKey }
-    }
-    existing.models = { ...existing.models, ...models }
-  } else {
-    config.provider[providerName] = {
-      npm: '@ai-sdk/openai-compatible',
-      name: providerName,
-      options: {
-        baseURL: baseUrl,
-        apiKey,
-      },
-      models,
-    }
+/**
+ * Builds a provider record containing Provider.Info and Model.Info array.
+ */
+export function buildProviderRecord(
+  providerId: string,
+  url: string,
+  apiKey: string | undefined,
+  models: Record<string, OpencodeModelConfig>,
+): { info: Provider.Info; models: Model.Info[] } {
+  const providerID = Provider.ID.make(providerId)
+  return {
+    info: buildProviderInfo(providerId, url, apiKey),
+    models: Object.entries(models).map(([id, config]) =>
+      buildModelInfo(providerID, id, config),
+    ),
   }
 }
